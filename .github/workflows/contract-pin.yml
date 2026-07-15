@@ -1,0 +1,22 @@
+name: Parwana contract pin
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  contract-pin:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out consumer
+        uses: actions/checkout@v4
+        with:
+          path: consumer
+      - name: Check out Parwana contract publisher
+        uses: actions/checkout@v4
+        with:
+          repository: diewan/parwana
+          path: parwana
+      - name: Reject missing, floating, expired, or incompatible contract pins
+        run: python3 parwana/scripts/check-contract-manifest.py --pin-file consumer/.diewan/parwana-contract.toml
+

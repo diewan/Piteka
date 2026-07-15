@@ -1,0 +1,19 @@
+schema_version = 1
+consumer = "piteka"
+publisher = "github.com/diewan/parwana"
+contract_version = "0.1.5"
+protocol_version = "1.0.0"
+expires_on = "2027-01-16"
+corpus_digest = "9158785f49a9713c6cca44725e28552de4c4ca4735849aea4ef380626cff80cb"
+
+[source]
+kind = "commit"
+value = "9b3fd916cd99b5f72aa41d6540a9e7947675848f"
+
+[compatibility]
+wire = "exact"
+semantic = "exact"
+source_api = "exact"
+stored_data = "exact"
+policy = "diewan-contract-compat-v1"
+
