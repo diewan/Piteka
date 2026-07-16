@@ -1,0 +1,42 @@
+[workspace]
+members = [
+    ".",
+    "crates/piteka-domain",
+    "crates/piteka-application",
+    "crates/piteka-infra",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.85"
+
+[workspace.dependencies]
+axum = "0.8"
+piteka-domain = { path = "crates/piteka-domain" }
+piteka-application = { path = "crates/piteka-application" }
+piteka-infra = { path = "crates/piteka-infra" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+
+[package]
+name = "piteka"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+axum.workspace = true
+piteka-application.workspace = true
+piteka-infra.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+piteka-domain.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+

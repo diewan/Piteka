@@ -1,0 +1,4 @@
+# Safe local defaults. Secrets are supplied through environment variables.
+listen_address = "127.0.0.1:3000"
+environment = "local"
+
