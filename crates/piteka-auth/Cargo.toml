@@ -1,0 +1,21 @@
+[package]
+name = "piteka-auth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# Demo authorization boundary (Master Plan §59 D-04). Composes the pure
+# authorization policy (piteka-application) with the append-only audit log
+# (piteka-storage) to enforce roles, require re-authentication for production
+# approvals, and record every denial.
+[dependencies]
+piteka-application.workspace = true
+piteka-storage.workspace = true
+
+[dev-dependencies]
+piteka-domain.workspace = true
+tokio = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

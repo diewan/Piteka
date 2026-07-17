@@ -1,0 +1,19 @@
+[package]
+name = "piteka-parwana"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# Narrow adapter boundary (ARCHITECTURE.md §5.1, §7): this is the ONLY Piteka
+# crate permitted to depend on the Parwana contract package. It links the public
+# `csv-sdk` facade at an EXACT pinned version — `latest` is prohibited in CI and
+# deployments — mirroring development/contract-pins/piteka.toml. Default features
+# (chain adapters requiring C libraries, tokio, wallet, native FS) are disabled;
+# only the always-present accountability facade is needed.
+[dependencies]
+csv-sdk = { version = "=0.1.5", path = "../../../parwana/csv-sdk", default-features = false, features = ["std"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

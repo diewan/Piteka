@@ -4,6 +4,9 @@ members = [
     "crates/piteka-domain",
     "crates/piteka-application",
     "crates/piteka-infra",
+    "crates/piteka-parwana",
+    "crates/piteka-storage",
+    "crates/piteka-auth",
 ]
 resolver = "2"
 
@@ -18,6 +21,9 @@ axum = "0.8"
 piteka-domain = { path = "crates/piteka-domain" }
 piteka-application = { path = "crates/piteka-application" }
 piteka-infra = { path = "crates/piteka-infra" }
+piteka-parwana = { path = "crates/piteka-parwana" }
+piteka-storage = { path = "crates/piteka-storage" }
+piteka-auth = { path = "crates/piteka-auth" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 
 [package]

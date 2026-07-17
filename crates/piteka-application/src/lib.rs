@@ -1,5 +1,19 @@
 #![forbid(unsafe_code)]
 
+pub mod authz;
+pub mod session;
+
+#[cfg(test)]
+mod authz_tests;
+#[cfg(test)]
+mod session_tests;
+
+pub use authz::{ActionSensitivity, AuthorizationRequest, Denial, ReauthPolicy};
+pub use session::{
+    AuthError, AuthenticatedSession, SessionAuthority, SessionSigner, Signature, SignatureAlgorithm,
+    SignedSession,
+};
+
 use piteka_domain::{Health, ServiceStatus};
 
 pub trait Clock: Send + Sync {

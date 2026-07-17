@@ -1,0 +1,35 @@
+[package]
+name = "piteka-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# Persistence adapters for Piteka. The portable core (ports, in-memory adapters,
+# and the content-addressed filesystem evidence store) has no database
+# dependency and is fully exercised by `cargo test`. The `postgres` feature adds
+# sqlx-backed adapters and the migration runner; it uses sqlx runtime queries so
+# the crate compiles without a live database. Postgres integration tests are
+# `#[ignore]`d and gated on `DATABASE_URL`.
+[features]
+default = []
+postgres = ["dep:sqlx"]
+
+[dependencies]
+async-trait = "0.1"
+sha2 = "0.10"
+hex = "0.4"
+sqlx = { version = "0.8", default-features = false, features = [
+    "postgres",
+    "runtime-tokio",
+    "tls-rustls",
+    "migrate",
+    "macros",
+], optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"
