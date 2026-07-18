@@ -1,0 +1,491 @@
+openapi: 3.1.0
+info:
+  title: Piteka Accountability API
+  description: >
+    REST API for the Piteka enterprise accountability workbench.
+    First-slice endpoints cover the action-request lifecycle:
+    propose, approve, reject, and revoke.
+  version: 0.1.0
+  license:
+    name: Apache-2.0
+
+servers:
+  - url: http://localhost:3000
+    description: Local development server
+
+tags:
+  - name: action-requests
+    description: Action request lifecycle
+
+paths:
+  /api/v1/action-requests:
+    get:
+      tags:
+        - action-requests
+      summary: List all action requests
+      description: Returns a compact summary of all action requests.
+      operationId: listActionRequests
+      responses:
+        "200":
+          description: List of action request summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ActionRequestSummary"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    post:
+      tags:
+        - action-requests
+      summary: Propose a new action request
+      description: >
+        Creates a new action request in `Pending` status.
+        Supports idempotency via the `Idempotency-Key` header.
+      operationId: proposeActionRequest
+      headers:
+        Idempotency-Key:
+          schema:
+            type: string
+          description: Idempotency key for safe retries
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateActionRequestRequest"
+      responses:
+        "201":
+          description: Action request created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionRequestResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Idempotency key conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/action-requests/{id}:
+    get:
+      tags:
+        - action-requests
+      summary: Get an action request
+      description: Returns full detail for a single action request.
+      operationId: getActionRequest
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Action request identifier
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Action request detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionRequestResponse"
+        "404":
+          description: Action request not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/action-requests/{id}/approve:
+    post:
+      tags:
+        - action-requests
+      summary: Approve an action request
+      description: >
+        Approves a pending action request. Requires the approver's user id,
+        the intent digest reviewed, and the expected version for CAS.
+        Supports idempotency via the `Idempotency-Key` header.
+      operationId: approveActionRequest
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Action request identifier
+          schema:
+            type: string
+      headers:
+        Idempotency-Key:
+          schema:
+            type: string
+          description: Idempotency key for safe retries
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApproveRequest"
+      responses:
+        "200":
+          description: Action request approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionRequestResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Action request not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Conflict: invalid state or version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/action-requests/{id}/reject:
+    post:
+      tags:
+        - action-requests
+      summary: Reject an action request
+      description: >
+        Rejects a pending action request. Requires the approver's user id,
+        the intent digest reviewed, and the expected version for CAS.
+        Supports idempotency via the `Idempotency-Key` header.
+      operationId: rejectActionRequest
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Action request identifier
+          schema:
+            type: string
+      headers:
+        Idempotency-Key:
+          schema:
+            type: string
+          description: Idempotency key for safe retries
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RejectRequest"
+      responses:
+        "200":
+          description: Action request rejected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionRequestResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Action request not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Conflict: invalid state or version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/action-requests/{id}/revoke:
+    post:
+      tags:
+        - action-requests
+      summary: Revoke an approved action request
+      description: >
+        Revokes an approved action request before dispatch.
+        Requires the approver's user id and the expected version for CAS.
+        Supports idempotency via the `Idempotency-Key` header.
+      operationId: revokeActionRequest
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Action request identifier
+          schema:
+            type: string
+      headers:
+        Idempotency-Key:
+          schema:
+            type: string
+          description: Idempotency key for safe retries
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RevokeRequest"
+      responses:
+        "200":
+          description: Action request revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionRequestResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Action request not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Conflict: invalid state or version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    ActionRequestStatus:
+      type: string
+      enum:
+        - Pending
+        - Approved
+        - Rejected
+        - Revoked
+      description: The current status of an action request.
+
+    ActionRequestSummary:
+      type: object
+      required:
+        - id
+        - requested_by
+        - status
+        - created_at
+      properties:
+        id:
+          type: string
+          description: The request identifier.
+        requested_by:
+          type: string
+          description: The user who proposed the request.
+        status:
+          $ref: "#/components/schemas/ActionRequestStatus"
+        created_at:
+          type: integer
+          format: int64
+          description: Creation time, Unix seconds.
+
+    ActionRequestResponse:
+      type: object
+      required:
+        - id
+        - requested_by
+        - status
+        - created_at
+      properties:
+        id:
+          type: string
+          description: The request identifier.
+        requested_by:
+          type: string
+          description: The user who proposed the request.
+        intent_id:
+          type: string
+          description: Parwana intent digest (lower-case hex), if already constructed.
+        status:
+          $ref: "#/components/schemas/ActionRequestStatus"
+        created_at:
+          type: integer
+          format: int64
+          description: Creation time, Unix seconds.
+        decisions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApprovalDecisionResponse"
+          description: Approval decisions recorded for this request.
+
+    ApprovalDecisionResponse:
+      type: object
+      required:
+        - id
+        - decided_by
+        - decision
+        - decided_at
+      properties:
+        id:
+          type: string
+          description: The decision identifier.
+        decided_by:
+          type: string
+          description: The user who made the decision.
+        decision:
+          type: string
+          description: `approved` or `rejected`.
+        intent_id:
+          type: string
+          description: The intent digest the approver reviewed.
+        decided_at:
+          type: integer
+          format: int64
+          description: Decision time, Unix seconds.
+
+    CreateActionRequestRequest:
+      type: object
+      required:
+        - requested_by
+      properties:
+        requested_by:
+          type: string
+          description: The user proposing the action.
+        intent_id:
+          type: string
+          description: Parwana intent digest (lower-case hex), if already constructed.
+
+    ApproveRequest:
+      type: object
+      required:
+        - approver_id
+        - version
+      properties:
+        approver_id:
+          type: string
+          description: The approver's user id.
+        intent_id:
+          type: string
+          description: The intent digest the approver reviewed.
+        version:
+          type: integer
+          format: int64
+          description: The expected version for optimistic concurrency (CAS).
+
+    RejectRequest:
+      type: object
+      required:
+        - approver_id
+        - version
+      properties:
+        approver_id:
+          type: string
+          description: The approver's user id.
+        intent_id:
+          type: string
+          description: The intent digest the approver reviewed.
+        version:
+          type: integer
+          format: int64
+          description: The expected version for optimistic concurrency (CAS).
+
+    RevokeRequest:
+      type: object
+      required:
+        - approver_id
+        - version
+      properties:
+        approver_id:
+          type: string
+          description: The approver's user id.
+        version:
+          type: integer
+          format: int64
+          description: The expected version for optimistic concurrency (CAS).
+
+    ErrorCause:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          description: Machine-readable error code.
+        message:
+          type: string
+          description: Human-readable explanation.
+        source:
+          type: string
+          nullable: true
+          description: Optional field or header that triggered the error.
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          $ref: "#/components/schemas/ErrorDetail"
+
+    ErrorDetail:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          description: Machine-readable error code.
+        message:
+          type: string
+          description: Human-readable explanation.
+        causes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ErrorCause"
+          nullable: true
+          description: Optional list of specific causes.

@@ -1,0 +1,5 @@
+[general]
+# Templates are in piteka-ui/templates/ relative to workspace root
+# From apps/piteka-web, that's ../../crates/piteka-ui/templates
+dirs = ["../../crates/piteka-ui/templates"]
+default_encoding = "utf-8"

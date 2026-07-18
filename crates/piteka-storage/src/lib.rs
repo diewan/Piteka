@@ -28,11 +28,13 @@ pub use digest::ContentDigest;
 pub use error::{StorageError, StorageResult};
 pub use evidence::LocalEvidenceStore;
 pub use model::{
-    AuditEvent, CasOutcome, EvidenceDescriptor, MandateProjection, ProtocolObjectRecord,
-    WebhookReceipt, WebhookRecordOutcome,
+    ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome,
+    EvidenceDescriptor, MandateProjection, ProtocolObjectRecord, WebhookReceipt,
+    WebhookRecordOutcome,
 };
 pub use ports::{
-    AuditLog, EvidenceObjectStore, MandateProjectionStore, ProtocolObjectStore, WebhookReceiptStore,
+    ActionRequestStore, ApprovalDecisionStore, AuditLog, EvidenceObjectStore, MandateProjectionStore,
+    ProtocolObjectStore, WebhookReceiptStore,
 };
 
 #[cfg(test)]

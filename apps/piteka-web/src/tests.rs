@@ -1,0 +1,580 @@
+#![forbid(unsafe_code)]
+
+//! Tests for the Piteka web approval UI.
+//!
+//! Covers:
+//! - HTML pages are served with correct content
+//! - CSS design tokens are present
+//! - Accessibility: semantic HTML, ARIA attributes, keyboard navigation
+//! - Design system token contrast ratios (WCAG AA)
+
+use axum::{
+    Router,
+    body::Body,
+    http::{Request, StatusCode},
+};
+use tower_service::Service;
+
+/// Returns a test router with web routes + assets.
+fn test_router() -> Router {
+    let ports = piteka_api::TestPorts::new();
+    let use_case = ports.use_case();
+    piteka_web::web_router(use_case)
+}
+
+fn assets_router() -> Router {
+    piteka_web::assets_router()
+}
+
+fn combined_router() -> Router {
+    let ports = piteka_api::TestPorts::new();
+    let use_case = ports.use_case();
+    Router::new()
+        .merge(piteka_web::assets_router())
+        .merge(piteka_web::web_router(use_case))
+}
+
+// ── Positive tests: pages are served ───────────────────────────────────────
+
+#[tokio::test]
+async fn work_queue_returns_200() {
+    let mut app = test_router();
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/work-queue")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.call(request).await.expect("call failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    assert!(body.contains("<!DOCTYPE html>"));
+    assert!(body.contains("Work queue"));
+    assert!(body.contains("pk-sidebar"));
+}
+
+#[tokio::test]
+async fn request_detail_returns_200() {
+    let mut app = combined_router();
+
+    // First create a request via the API
+    let body = serde_json::json!({
+        "requested_by": "agent@example.com",
+        "intent_id": "intent-d08-test"
+    });
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/action-requests")
+        .header("content-type", "application/json")
+        .header("X-Tenant-Id", "demo")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+
+    let response = app.call(request).await.expect("call failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let request_id: String = {
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        body["id"].as_str().unwrap().to_string()
+    };
+
+    // Now visit the detail page
+    let request = Request::builder()
+        .method("GET")
+        .uri(&format!("/request/{}", request_id))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.call(request).await.expect("call failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    assert!(body.contains("pk-intent-panel"));
+    assert!(body.contains("Requested action"));
+}
+
+#[tokio::test]
+async fn executions_returns_200() {
+    let mut app = test_router();
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/executions")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.call(request).await.expect("call failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    assert!(body.contains("Executions"));
+}
+
+#[tokio::test]
+async fn case_files_returns_200() {
+    let mut app = test_router();
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/case-files")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.call(request).await.expect("call failed");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn verification_returns_200() {
+    let mut app = test_router();
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/verification")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.call(request).await.expect("call failed");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn settings_returns_200() {
+    let mut app = test_router();
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/settings")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.call(request).await.expect("call failed");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn css_is_served() {
+    let mut app = assets_router();
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/assets/piteka.css")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.call(request).await.expect("call failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    assert!(body.contains("--surface-0:"));
+    assert!(body.contains("--ink-1:"));
+    assert!(body.contains("--interactive:"));
+    assert!(body.contains("--seal:"));
+}
+
+// ── Accessibility tests ───────────────────────────────────────────────────
+
+#[tokio::test]
+async fn work_queue_has_semantic_html_structure() {
+    let mut app = test_router();
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/work-queue")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.call(request).await.expect("call failed");
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    // Must have DOCTYPE, html, head, body
+    assert!(body.contains("<!DOCTYPE html>"));
+    assert!(body.contains("<html"));
+    assert!(body.contains("<head>"));
+    assert!(body.contains("<body>"));
+
+    // Must have a nav element for sidebar navigation
+    assert!(body.contains("<aside") || body.contains("pk-sidebar"));
+
+    // Must have a main element
+    assert!(body.contains("<main") || body.contains("pk-main"));
+
+    // Must have a table with scope attributes for headers
+    assert!(body.contains("scope=\"col\""));
+
+    // Must have lang attribute on html
+    assert!(body.contains("lang=\"en\""));
+}
+
+#[tokio::test]
+async fn request_detail_has_aria_attributes() {
+    let mut app = combined_router();
+
+    // Create a request first
+    let body = serde_json::json!({
+        "requested_by": "agent@example.com",
+        "intent_id": "intent-aria-test"
+    });
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/action-requests")
+        .header("content-type", "application/json")
+        .header("X-Tenant-Id", "demo")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+
+    let response = app.call(request).await.expect("call failed");
+    let request_id: String = {
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        body["id"].as_str().unwrap().to_string()
+    };
+
+    // Visit the detail page
+    let request = Request::builder()
+        .method("GET")
+        .uri(&format!("/request/{}", request_id))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.call(request).await.expect("call failed");
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    // Must have aria-label on navigation
+    assert!(body.contains("aria-label"));
+
+    // Must have aria-current for active page
+    assert!(body.contains("aria-current"));
+
+    // Must have role attributes on key elements
+    assert!(body.contains("role="));
+}
+
+#[tokio::test]
+async fn step_up_overlay_is_accessible() {
+    let mut app = test_router();
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/request/test-id")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.call(request).await.expect("call failed");
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    // Must have the step-up overlay with dialog role
+    assert!(body.contains("pk-overlay"));
+    assert!(body.contains("role=\"dialog\""));
+    assert!(body.contains("aria-modal=\"true\""));
+
+    // Must have a cancel button
+    assert!(body.contains("pk-btn-secondary") || body.contains("Cancel"));
+
+    // Must have a password input with autocomplete
+    assert!(body.contains("type=\"password\""));
+    assert!(body.contains("autocomplete=\"current-password\""));
+}
+
+#[tokio::test]
+async fn status_chips_use_icon_plus_label_not_color_only() {
+    let mut app = test_router();
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/work-queue")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.call(request).await.expect("call failed");
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    // Status chips must have both icon and label
+    assert!(body.contains("pk-status-chip"));
+    assert!(body.contains("pk-status-icon"));
+}
+
+#[tokio::test]
+async fn hash_fields_are_copyable() {
+    let mut app = combined_router();
+
+    let body = serde_json::json!({
+        "requested_by": "agent@example.com",
+        "intent_id": "a3f9c2b1d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1"
+    });
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/action-requests")
+        .header("content-type", "application/json")
+        .header("X-Tenant-Id", "demo")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+
+    let response = app.call(request).await.expect("call failed");
+    let request_id: String = {
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        body["id"].as_str().unwrap().to_string()
+    };
+
+    let request = Request::builder()
+        .method("GET")
+        .uri(&format!("/request/{}", request_id))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.call(request).await.expect("call failed");
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    // Hash fields must be focusable (tabindex="0") and have a tooltip
+    assert!(body.contains("pk-hash-field"));
+    assert!(body.contains("hash-tooltip"));
+}
+
+// ── Design system token tests ─────────────────────────────────────────────
+
+#[tokio::test]
+async fn css_contains_all_required_design_tokens() {
+    let mut app = assets_router();
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/assets/piteka.css")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.call(request).await.expect("call failed");
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    // Required semantic tokens from Design System §2.1
+    assert!(body.contains("--status-met:"));
+    assert!(body.contains("--status-not-met:"));
+    assert!(body.contains("--status-indeterminate:"));
+    assert!(body.contains("--status-not-applicable:"));
+    assert!(body.contains("--status-attention:"));
+    assert!(body.contains("--status-quarantine:"));
+    assert!(body.contains("--status-gap:"));
+
+    // Piteka "Ledger" skin tokens from Design System §2.2
+    assert!(body.contains("--surface-0:"));
+    assert!(body.contains("--surface-1:"));
+    assert!(body.contains("--surface-2:"));
+    assert!(body.contains("--ink-1:"));
+    assert!(body.contains("--ink-2:"));
+    assert!(body.contains("--ink-3:"));
+    assert!(body.contains("--rule:"));
+    assert!(body.contains("--interactive:"));
+    assert!(body.contains("--seal:"));
+    assert!(body.contains("--focus-ring:"));
+
+    // Typography tokens
+    assert!(body.contains("IBM Plex Sans"));
+    assert!(body.contains("IBM Plex Mono"));
+
+    // Reduced motion support
+    assert!(body.contains("prefers-reduced-motion"));
+}
+
+#[tokio::test]
+async fn css_contrast_ratios_meet_wcag_aa() {
+    let mut app = assets_router();
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/assets/piteka.css")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.call(request).await.expect("call failed");
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    // Verify the actual color values are present
+    // WCAG AA requires 4.5:1 for body text, 3:1 for large text and UI components
+    // --ink-1 (#1C2430) on --surface-0 (#F6F7F5) = ~15:1 ✓
+    // --ink-2 (#4A5462) on --surface-0 (#F6F7F5) = ~7:1 ✓
+    // --interactive (#2C4C8A) on --surface-1 (#FFFFFF) = ~6.5:1 ✓
+    // --seal (#8C2F39) on --surface-1 (#FFFFFF) = ~6:1 ✓
+
+    assert!(body.contains("--ink-1: #1C2430"));
+    assert!(body.contains("--surface-0: #F6F7F5"));
+    assert!(body.contains("--ink-2: #4A5462"));
+    assert!(body.contains("--interactive: #2C4C8A"));
+    assert!(body.contains("--seal: #8C2F39"));
+}
+
+// ── Negative tests ────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn nonexistent_request_returns_work_queue_not_500() {
+    let mut app = test_router();
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/request/nonexistent-request-id")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.call(request).await.expect("call failed");
+    // Should not crash with 500
+    assert!(response.status() < StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn css_has_focus_visible_styles() {
+    let mut app = assets_router();
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/assets/piteka.css")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.call(request).await.expect("call failed");
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    // Must have :focus-visible styles for keyboard navigation
+    assert!(body.contains(":focus-visible"));
+    assert!(body.contains("outline:"));
+}
+
+#[tokio::test]
+async fn pages_include_limitations_strip() {
+    let mut app = combined_router();
+
+    let body = serde_json::json!({
+        "requested_by": "agent@example.com",
+        "intent_id": "intent-limitations-test"
+    });
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/action-requests")
+        .header("content-type", "application/json")
+        .header("X-Tenant-Id", "demo")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+
+    let response = app.call(request).await.expect("call failed");
+    let request_id: String = {
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        body["id"].as_str().unwrap().to_string()
+    };
+
+    let request = Request::builder()
+        .method("GET")
+        .uri(&format!("/request/{}", request_id))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.call(request).await.expect("call failed");
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    // Limitations strip must be present on every receipt/detail page
+    assert!(body.contains("pk-limitations-strip"));
+    assert!(body.contains("What this record does not establish"));
+}

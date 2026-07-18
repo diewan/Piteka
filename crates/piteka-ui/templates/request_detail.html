@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+
+{% block body %}
+<!-- Breadcrumbs -->
+<nav class="pk-breadcrumbs" aria-label="Breadcrumb">
+  <a href="/work-queue">Work queue</a>
+  <span class="separator" aria-hidden="true">/</span>
+  <span class="current">Request {{ request.id }}</span>
+</nav>
+
+<!-- Page header -->
+<div class="pk-page-header pk-flex-between">
+  <div>
+    <h1>Request {{ request.id }}</h1>
+    <p>
+      <span class="pk-status-chip pk-status-chip--{{ request.status_class }}">
+        <span class="pk-status-icon" aria-hidden="true">{{ request.status_icon }}</span>
+        {{ request.status_label }}
+      </span>
+      &nbsp;Requested by {{ request.requested_by }}
+    </p>
+  </div>
+</div>
+
+<!-- Intent panel — the approval's centerpiece -->
+<div class="pk-intent-panel pk-mb-lg">
+  <div class="pk-intent-panel-header">
+    <h3>Requested action</h3>
+    <span class="pk-provenance-chip">Recorded by Piteka</span>
+  </div>
+  <div class="pk-intent-panel-body">
+    <div class="pk-intent-field">
+      <span class="pk-intent-field-label">Repository</span>
+      <span class="pk-intent-field-value">{{ intent.repository_owner }}/{{ intent.repository_name }}</span>
+    </div>
+    <div class="pk-intent-field">
+      <span class="pk-intent-field-label">Commit</span>
+      <span class="pk-intent-field-value">
+        <span class="pk-hash-field" tabindex="0" role="button" aria-label="Copy commit SHA {{ intent.commit_sha }}">
+          {{ intent.commit_sha | truncate_hash }}
+          <span class="hash-tooltip">{{ intent.commit_sha }}</span>
+        </span>
+      </span>
+    </div>
+    <div class="pk-intent-field">
+      <span class="pk-intent-field-label">Environment</span>
+      <span class="pk-intent-field-value">
+        {{ intent.environment_name }}
+        {% if intent.production_environment %}
+        <span class="pk-status-chip pk-status-chip--not-met" style="margin-left:var(--space-sm);">Production</span>
+        {% endif %}
+      </span>
+    </div>
+    <div class="pk-intent-field">
+      <span class="pk-intent-field-label">Task</span>
+      <span class="pk-intent-field-value">{{ intent.task }}</span>
+    </div>
+    <div class="pk-intent-field">
+      <span class="pk-intent-field-label">Expiry</span>
+      <span class="pk-intent-field-value">
+        {% if intent.expires_at.is_some() %}
+        {{ intent.expires_at_human }}
+        {% if intent.expired %}
+        <span class="pk-status-chip pk-status-chip--not-met" style="margin-left:var(--space-sm);">Expired</span>
+        {% endif %}
+        {% else %}
+        No expiry set
+        {% endif %}
+      </span>
+    </div>
+    <div class="pk-intent-field">
+      <span class="pk-intent-field-label">Intent fingerprint</span>
+      <span class="pk-intent-field-value">
+        <span class="pk-hash-field" tabindex="0" role="button" aria-label="Copy intent digest {{ intent.digest }}">
+          {{ intent.digest | truncate_hash }}
+          <span class="hash-tooltip">{{ intent.digest }}</span>
+        </span>
+      </span>
+    </div>
+    <div class="pk-intent-field">
+      <span class="pk-intent-field-label">Requested at</span>
+      <span class="pk-intent-field-value">
+        <time datetime="{{ request.created_at_iso }}">{{ request.created_at_human }}</time>
+      </span>
+    </div>
+  </div>
+</div>
+
+<!-- Evidence requirements -->
+{% if !intent.evidence_requirements.is_empty() %}
+<div class="pk-card pk-mb-lg">
+  <div class="pk-card-header">
+    <h3>Evidence requirements</h3>
+    <span class="pk-provenance-chip">Recorded by Piteka</span>
+  </div>
+  <ul style="list-style:none;padding:0;">
+    {% for req in intent.evidence_requirements %}
+    <li style="padding:var(--space-xs) 0;font-size:0.875rem;color:var(--ink-1);">
+      <span aria-hidden="true" style="color:var(--ink-3);margin-right:var(--space-xs);">—</span>
+      {{ req }}
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<!-- Decisions history -->
+{% if !request.decisions.is_empty() %}
+<div class="pk-card pk-mb-lg">
+  <div class="pk-card-header">
+    <h3>Decisions</h3>
+  </div>
+  <table class="pk-table">
+    <thead>
+      <tr>
+        <th scope="col">Decided by</th>
+        <th scope="col">Decision</th>
+        <th scope="col">At</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for dec in request.decisions %}
+      <tr>
+        <td>
+          <span class="pk-identity-badge">
+            <span class="pk-identity-avatar" aria-hidden="true">{{ dec.decided_by | first_char }}</span>
+            {{ dec.decided_by }}
+          </span>
+        </td>
+        <td>
+          <span class="pk-status-chip pk-status-chip--{{ dec.decision_class }}">
+            {{ dec.decision_label }}
+          </span>
+        </td>
+        <td>
+          <time datetime="{{ dec.decided_at_iso }}">{{ dec.decided_at_human }}</time>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<!-- Quarantine banner (if applicable) -->
+{% if request.status == "Quarantined" %}
+<div class="pk-quarantine-banner" role="alert">
+  <div class="pk-quarantine-banner-title">Outcome under review</div>
+  We can't yet confirm whether the action happened. No retry will occur until this is resolved.
+</div>
+{% endif %}
+
+<!-- Approval action bar — only shown for Pending requests -->
+{% if request.status == "Pending" %}
+<div class="pk-approval-actions" role="region" aria-label="Approval actions">
+  <button type="button" class="pk-btn pk-btn-seal"
+          onclick="pkOpenStepUp('Approving this action creates a single-use signed approval. This cannot be undone.')"
+          aria-label="Approve and sign request {{ request.id }}">
+    Approve &amp; sign
+  </button>
+  <form method="post" action="/api/v1/action-requests/{{ request.id }}/reject" style="display:inline;">
+    <button type="submit" class="pk-btn pk-btn-destructive"
+            {% if request.decisions.iter().any(|d| d.decision == "approved") %}disabled{% endif %}
+            aria-label="Reject request {{ request.id }}">
+      Reject
+    </button>
+  </form>
+  <div class="pk-actions-spacer"></div>
+  <div class="pk-reauth-note">
+    Approve &amp; sign requires step-up authentication. Your approval creates a signed, single-use authorization.
+  </div>
+</div>
+{% endif %}
+
+<!-- Limitations strip — always shown on detail page -->
+<div class="pk-limitations-strip" role="note">
+  <strong>What this record does not establish:</strong> that the action was legally authorized beyond this approval policy,
+  that every statement inside the evidence is factually true, or that all relevant events were captured.
+</div>
+
+{% endblock %}

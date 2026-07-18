@@ -1,0 +1,23 @@
+[package]
+name = "piteka-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+axum.workspace = true
+piteka-application.workspace = true
+piteka-domain.workspace = true
+piteka-storage.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+async-trait.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tokio.workspace = true
+serde_json = "1"
+tower-service = "0.3"

@@ -12,11 +12,12 @@ use async_trait::async_trait;
 use crate::digest::ContentDigest;
 use crate::error::{StorageError, StorageResult};
 use crate::model::{
-    AuditEvent, CasOutcome, EvidenceDescriptor, MandateProjection, ProtocolObjectRecord,
-    WebhookReceipt, WebhookRecordOutcome,
+    ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome, EvidenceDescriptor,
+    MandateProjection, ProtocolObjectRecord, WebhookReceipt, WebhookRecordOutcome,
 };
 use crate::ports::{
-    AuditLog, EvidenceObjectStore, MandateProjectionStore, ProtocolObjectStore, WebhookReceiptStore,
+    ActionRequestStore, ApprovalDecisionStore, AuditLog, EvidenceObjectStore,
+    MandateProjectionStore, ProtocolObjectStore, WebhookReceiptStore,
 };
 
 /// In-memory immutable protocol-object store.
@@ -210,5 +211,167 @@ impl AuditLog for InMemoryAuditLog {
         let events = self.events.lock().expect("lock poisoned");
         let start = events.len().saturating_sub(limit);
         Ok(events[start..].to_vec())
+    }
+}
+
+/// In-memory action request store with version CAS.
+#[derive(Default)]
+pub struct InMemoryActionRequestStore {
+    requests: Mutex<HashMap<String, ActionRequest>>,
+    versions: Mutex<HashMap<String, i64>>,
+}
+
+#[async_trait]
+impl ActionRequestStore for InMemoryActionRequestStore {
+    async fn insert(&self, request: ActionRequest) -> StorageResult<()> {
+        if request.request_id.is_empty() {
+            return Err(StorageError::EmptyField("request_id"));
+        }
+        let mut requests = self.requests.lock().expect("lock poisoned");
+        if requests.contains_key(&request.request_id) {
+            return Err(StorageError::Backend(format!(
+                "action request `{}` already exists",
+                request.request_id
+            )));
+        }
+        requests.insert(request.request_id.clone(), request);
+        Ok(())
+    }
+
+    async fn get(&self, request_id: &str) -> StorageResult<Option<ActionRequest>> {
+        Ok(self
+            .requests
+            .lock()
+            .expect("lock poisoned")
+            .get(request_id)
+            .cloned())
+    }
+
+    async fn list(&self) -> StorageResult<Vec<ActionRequest>> {
+        let requests = self.requests.lock().expect("lock poisoned");
+        Ok(requests.values().cloned().collect())
+    }
+
+    async fn compare_and_swap(
+        &self,
+        request_id: &str,
+        expected_version: i64,
+        new_status: ActionRequestStatus,
+    ) -> StorageResult<CasOutcome> {
+        let mut requests = self.requests.lock().expect("lock poisoned");
+        let mut versions = self.versions.lock().expect("lock poisoned");
+        let Some(request) = requests.get_mut(request_id) else {
+            return Ok(CasOutcome::Missing);
+        };
+        let current_version = versions
+            .get(request_id)
+            .copied()
+            .unwrap_or(1);
+        if current_version != expected_version {
+            return Ok(CasOutcome::Conflict {
+                current_version,
+            });
+        }
+        let new_version = current_version + 1;
+        versions.insert(request_id.to_string(), new_version);
+        request.status = new_status;
+        Ok(CasOutcome::Applied {
+            new_version,
+        })
+    }
+}
+
+/// In-memory approval decision store.
+#[derive(Default)]
+pub struct InMemoryApprovalDecisionStore {
+    decisions: Mutex<HashMap<String, ApprovalDecision>>,
+    by_request: Mutex<HashMap<String, Vec<String>>>,
+}
+
+#[async_trait]
+impl ApprovalDecisionStore for InMemoryApprovalDecisionStore {
+    async fn insert(&self, decision: ApprovalDecision) -> StorageResult<()> {
+        if decision.decision_id.is_empty() {
+            return Err(StorageError::EmptyField("decision_id"));
+        }
+        let mut decisions = self.decisions.lock().expect("lock poisoned");
+        if decisions.contains_key(&decision.decision_id) {
+            return Err(StorageError::Backend(format!(
+                "approval decision `{}` already exists",
+                decision.decision_id
+            )));
+        }
+        decisions.insert(decision.decision_id.clone(), decision.clone());
+        self.by_request
+            .lock()
+            .expect("lock poisoned")
+            .entry(decision.request_id)
+            .or_default()
+            .push(decision.decision_id);
+        Ok(())
+    }
+
+    async fn get(&self, decision_id: &str) -> StorageResult<Option<ApprovalDecision>> {
+        Ok(self
+            .decisions
+            .lock()
+            .expect("lock poisoned")
+            .get(decision_id)
+            .cloned())
+    }
+
+    async fn by_request(&self, request_id: &str) -> StorageResult<Vec<ApprovalDecision>> {
+        let decisions = self.decisions.lock().expect("lock poisoned");
+        let ids = self
+            .by_request
+            .lock()
+            .expect("lock poisoned")
+            .get(request_id)
+            .cloned()
+            .unwrap_or_default();
+        Ok(ids
+            .iter()
+            .filter_map(|id| decisions.get(id).cloned())
+            .collect())
+    }
+}
+
+// Blanket impl: Arc<T> implements the store traits when T does.
+#[async_trait]
+impl ActionRequestStore for std::sync::Arc<InMemoryActionRequestStore> {
+    async fn insert(&self, request: ActionRequest) -> StorageResult<()> {
+        self.as_ref().insert(request).await
+    }
+    async fn get(&self, request_id: &str) -> StorageResult<Option<ActionRequest>> {
+        self.as_ref().get(request_id).await
+    }
+    async fn list(&self) -> StorageResult<Vec<ActionRequest>> {
+        self.as_ref().list().await
+    }
+    async fn compare_and_swap(&self, request_id: &str, expected_version: i64, new_status: ActionRequestStatus) -> StorageResult<CasOutcome> {
+        self.as_ref().compare_and_swap(request_id, expected_version, new_status).await
+    }
+}
+
+#[async_trait]
+impl ApprovalDecisionStore for std::sync::Arc<InMemoryApprovalDecisionStore> {
+    async fn insert(&self, decision: ApprovalDecision) -> StorageResult<()> {
+        self.as_ref().insert(decision).await
+    }
+    async fn get(&self, decision_id: &str) -> StorageResult<Option<ApprovalDecision>> {
+        self.as_ref().get(decision_id).await
+    }
+    async fn by_request(&self, request_id: &str) -> StorageResult<Vec<ApprovalDecision>> {
+        self.as_ref().by_request(request_id).await
+    }
+}
+
+#[async_trait]
+impl AuditLog for std::sync::Arc<InMemoryAuditLog> {
+    async fn append(&self, event: AuditEvent) -> StorageResult<()> {
+        self.as_ref().append(event).await
+    }
+    async fn recent(&self, limit: usize) -> StorageResult<Vec<AuditEvent>> {
+        self.as_ref().recent(limit).await
     }
 }

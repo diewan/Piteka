@@ -6,7 +6,12 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-trait = "0.1"
 piteka-domain.workspace = true
+piteka-storage.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"

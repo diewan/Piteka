@@ -7,12 +7,22 @@ fn workspace_dependencies_point_inward() {
     let application =
         fs::read_to_string(root.join("crates/piteka-application/Cargo.toml")).unwrap();
     let infra = fs::read_to_string(root.join("crates/piteka-infra/Cargo.toml")).unwrap();
+    let ui = fs::read_to_string(root.join("crates/piteka-ui/Cargo.toml")).unwrap();
 
     assert!(!domain.contains("piteka-application"));
     assert!(!domain.contains("piteka-infra"));
+    assert!(!domain.contains("piteka-ui"));
     assert!(application.contains("piteka-domain.workspace = true"));
     assert!(!application.contains("piteka-infra"));
+    assert!(!application.contains("piteka-ui"));
     assert!(infra.contains("piteka-application.workspace = true"));
+    // piteka-ui is a UI-only crate: no internal piteka dependencies
+    assert!(!ui.contains("piteka-domain"));
+    assert!(!ui.contains("piteka-application"));
+    assert!(!ui.contains("piteka-infra"));
+    assert!(!ui.contains("piteka-storage"));
+    assert!(!ui.contains("piteka-auth"));
+    assert!(!ui.contains("piteka-parwana"));
 }
 
 /// The Parwana contract has exactly one dependency edge into Piteka: the
@@ -35,8 +45,8 @@ fn only_the_adapter_links_the_parwana_contract() {
         "adapter must reach the protocol only through the public csv-sdk facade"
     );
 
-    // Every other workspace crate, plus the root binary, must stay free of any
-    // direct `csv-*` protocol dependency.
+    // Every other workspace crate, plus the root binary and apps, must stay
+    // free of any direct `csv-*` protocol dependency.
     let mut manifests = vec![fs::read_to_string(root.join("Cargo.toml")).unwrap()];
     for entry in fs::read_dir(&crates).unwrap() {
         let dir = entry.unwrap().path();
@@ -46,6 +56,17 @@ fn only_the_adapter_links_the_parwana_contract() {
         let manifest = dir.join("Cargo.toml");
         if manifest.exists() {
             manifests.push(fs::read_to_string(manifest).unwrap());
+        }
+    }
+    // Also check apps/
+    let apps_dir = root.join("apps");
+    if apps_dir.exists() {
+        for entry in fs::read_dir(&apps_dir).unwrap() {
+            let dir = entry.unwrap().path();
+            let manifest = dir.join("Cargo.toml");
+            if manifest.exists() {
+                manifests.push(fs::read_to_string(manifest).unwrap());
+            }
         }
     }
     for manifest in manifests {

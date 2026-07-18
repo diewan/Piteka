@@ -1,0 +1,977 @@
+/* Piteka Design System — "Ledger" skin
+ *
+ * Implements the Design System & Language Layer §2.2 tokens and §5 components.
+ * All pairs meet WCAG AA contrast ratios (4.5:1 body text, 3:1 large text/UI).
+ *
+ * Authority: DIEWAN_DESIGN_SYSTEM_AND_LANGUAGE.md
+ */
+
+/* ── Semantic tokens ─────────────────────────────────────────────────────── */
+
+:root {
+  /* Surfaces */
+  --surface-0: #F6F7F5;
+  --surface-1: #FFFFFF;
+  --surface-2: #EEF0ED;
+
+  /* Ink */
+  --ink-1: #1C2430;
+  --ink-2: #4A5462;
+  --ink-3: #7C8592;
+
+  /* Rules & borders */
+  --rule: #D8DCD6;
+
+  /* Interaction */
+  --interactive: #2C4C8A;
+  --interactive-hover: #1E3A6E;
+  --focus-ring: #2C4C8A;
+
+  /* Seal — sealing wax. ONLY on: Approve & sign, signature badges,
+     revocation confirmations. Never decorative. */
+  --seal: #8C2F39;
+  --seal-hover: #6E252E;
+
+  /* Status colors — never communicate by color alone */
+  --status-met: #1E7F5C;
+  --status-not-met: #B3362B;
+  --status-indeterminate: #5B5E8C;
+  --status-not-applicable: #8A8F98;
+  --status-attention: #A66A00;
+  --status-quarantine: #5B5E8C;
+  --status-gap: #8A8F98;
+
+  /* Spacing rhythm (8/12/16/24) */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-2xl: 32px;
+
+  /* Typography */
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Code", monospace;
+  --font-serif: "IBM Plex Serif", ui-serif, Georgia, serif;
+
+  /* Max content width */
+  --max-width: 1120px;
+
+  /* Border radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+}
+
+/* ── Reset & base ────────────────────────────────────────────────────────── */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--ink-1);
+  background-color: var(--surface-0);
+  min-height: 100vh;
+}
+
+/* Focus ring — always visible, 2px outer ring */
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Links */
+a {
+  color: var(--interactive);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--interactive-hover);
+  text-decoration: underline;
+}
+
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+
+.pk-app {
+  display: flex;
+  min-height: 100vh;
+}
+
+/* Sidebar — fixed, left */
+.pk-sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  background: var(--surface-1);
+  border-right: 1px solid var(--rule);
+  padding: var(--space-lg) 0;
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  overflow-y: auto;
+  z-index: 100;
+}
+
+.pk-sidebar-brand {
+  padding: var(--space-md) var(--space-lg);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--ink-1);
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: var(--space-md);
+}
+
+.pk-sidebar-nav {
+  list-style: none;
+}
+
+.pk-sidebar-nav li a {
+  display: block;
+  padding: var(--space-sm) var(--space-lg);
+  color: var(--ink-2);
+  font-size: 0.875rem;
+  border-left: 3px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.pk-sidebar-nav li a:hover,
+.pk-sidebar-nav li a[aria-current="page"] {
+  color: var(--ink-1);
+  border-left-color: var(--interactive);
+  text-decoration: none;
+}
+
+.pk-sidebar-nav li a[aria-current="page"] {
+  font-weight: 500;
+}
+
+.pk-sidebar-divider {
+  border: none;
+  border-top: 1px solid var(--rule);
+  margin: var(--space-md) var(--space-lg);
+}
+
+/* Main content area */
+.pk-main {
+  flex: 1;
+  margin-left: 220px;
+  padding: var(--space-xl) var(--space-2xl);
+  max-width: var(--max-width);
+  width: 100%;
+}
+
+/* ── Page header ─────────────────────────────────────────────────────────── */
+
+.pk-page-header {
+  margin-bottom: var(--space-xl);
+  padding-bottom: var(--space-lg);
+  border-bottom: 1px solid var(--rule);
+}
+
+.pk-page-header h1 {
+  font-size: 1.5625rem;
+  font-weight: 600;
+  color: var(--ink-1);
+  line-height: 1.3;
+}
+
+.pk-page-header p {
+  margin-top: var(--space-xs);
+  color: var(--ink-2);
+  font-size: 0.875rem;
+}
+
+/* ── Breadcrumbs ─────────────────────────────────────────────────────────── */
+
+.pk-breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 0.8125rem;
+  color: var(--ink-3);
+  margin-bottom: var(--space-lg);
+}
+
+.pk-breadcrumbs a {
+  color: var(--ink-3);
+}
+
+.pk-breadcrumbs a:hover {
+  color: var(--interactive);
+}
+
+.pk-breadcrumbs .separator {
+  margin: 0 var(--space-xs);
+  user-select: none;
+}
+
+.pk-breadcrumbs .current {
+  color: var(--ink-2);
+}
+
+/* ── Cards ───────────────────────────────────────────────────────────────── */
+
+.pk-card {
+  background: var(--surface-1);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  padding: var(--space-lg);
+}
+
+.pk-card + .pk-card {
+  margin-top: var(--space-md);
+}
+
+.pk-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-md);
+}
+
+.pk-card-header h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--ink-1);
+}
+
+/* ── Tables ──────────────────────────────────────────────────────────────── */
+
+.pk-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.pk-table th {
+  text-align: left;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-weight: 500;
+  font-size: 0.8125rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.pk-table td {
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink-1);
+  vertical-align: middle;
+}
+
+.pk-table tbody tr:hover {
+  background: var(--surface-2);
+}
+
+.pk-table tbody tr:focus-within {
+  background: var(--surface-2);
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+
+.pk-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-lg);
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  font-weight: 500;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-decoration: none;
+  line-height: 1.5;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.pk-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Primary — lapis */
+.pk-btn-primary {
+  background: var(--interactive);
+  color: #FFFFFF;
+  border-color: var(--interactive);
+}
+
+.pk-btn-primary:hover {
+  background: var(--interactive-hover);
+  border-color: var(--interactive-hover);
+}
+
+/* Seal — APPROVE & SIGN only */
+.pk-btn-seal {
+  background: var(--seal);
+  color: #FFFFFF;
+  border-color: var(--seal);
+}
+
+.pk-btn-seal:hover {
+  background: var(--seal-hover);
+  border-color: var(--seal-hover);
+}
+
+/* Secondary */
+.pk-btn-secondary {
+  background: var(--surface-1);
+  color: var(--ink-1);
+  border-color: var(--rule);
+}
+
+.pk-btn-secondary:hover {
+  background: var(--surface-2);
+}
+
+/* Destructive */
+.pk-btn-destructive {
+  background: var(--surface-1);
+  color: var(--status-not-met);
+  border-color: var(--status-not-met);
+}
+
+.pk-btn-destructive:hover {
+  background: var(--status-not-met);
+  color: #FFFFFF;
+}
+
+/* Ghost */
+.pk-btn-ghost {
+  background: transparent;
+  color: var(--ink-2);
+  border-color: transparent;
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.pk-btn-ghost:hover {
+  background: var(--surface-2);
+  color: var(--ink-1);
+}
+
+/* Disabled */
+.pk-btn:disabled,
+.pk-btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ── StatusChip ──────────────────────────────────────────────────────────── */
+/* Icon + label + color; never color-only */
+
+.pk-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 2px var(--space-sm);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  line-height: 1.5;
+}
+
+.pk-status-chip .pk-status-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+}
+
+.pk-status-chip--met {
+  background: color-mix(in srgb, var(--status-met) 10%, transparent);
+  color: var(--status-met);
+}
+
+.pk-status-chip--not-met {
+  background: color-mix(in srgb, var(--status-not-met) 10%, transparent);
+  color: var(--status-not-met);
+}
+
+.pk-status-chip--indeterminate {
+  background: color-mix(in srgb, var(--status-indeterminate) 10%, transparent);
+  color: var(--status-indeterminate);
+}
+
+.pk-status-chip--not-applicable {
+  background: color-mix(in srgb, var(--status-not-applicable) 10%, transparent);
+  color: var(--status-not-applicable);
+}
+
+.pk-status-chip--attention {
+  background: color-mix(in srgb, var(--status-attention) 10%, transparent);
+  color: var(--status-attention);
+}
+
+.pk-status-chip--quarantine {
+  background: color-mix(in srgb, var(--status-quarantine) 15%, transparent);
+  color: var(--status-quarantine);
+  border: 1px solid var(--status-quarantine);
+}
+
+.pk-status-chip--pending {
+  background: color-mix(in srgb, var(--status-attention) 10%, transparent);
+  color: var(--status-attention);
+}
+
+.pk-status-chip--approved {
+  background: color-mix(in srgb, var(--status-met) 10%, transparent);
+  color: var(--status-met);
+}
+
+.pk-status-chip--rejected {
+  background: color-mix(in srgb, var(--status-not-met) 10%, transparent);
+  color: var(--status-not-met);
+}
+
+.pk-status-chip--revoked {
+  background: color-mix(in srgb, var(--ink-3) 10%, transparent);
+  color: var(--ink-3);
+}
+
+/* ── ProvenanceChip ──────────────────────────────────────────────────────── */
+/* The signature element — mandatory on every asserted fact */
+
+.pk-provenance-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px var(--space-xs);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--ink-3);
+  background: var(--surface-2);
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+/* ── HashField ───────────────────────────────────────────────────────────── */
+/* Truncated: first 6 + … + last 4, Plex Mono */
+
+.pk-hash-field {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  cursor: pointer;
+  position: relative;
+  display: inline-block;
+  padding: 1px 2px;
+  border-radius: 2px;
+  transition: background 0.15s;
+}
+
+.pk-hash-field:hover,
+.pk-hash-field:focus {
+  background: var(--surface-2);
+  text-decoration: none;
+}
+
+.pk-hash-field .hash-tooltip {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  background: var(--ink-1);
+  color: #FFFFFF;
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  z-index: 10;
+  font-family: var(--font-mono);
+}
+
+.pk-hash-field:hover .hash-tooltip,
+.pk-hash-field:focus .hash-tooltip {
+  display: block;
+}
+
+/* ── IdentityBadge ───────────────────────────────────────────────────────── */
+
+.pk-identity-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 2px var(--space-sm);
+  font-size: 0.8125rem;
+  color: var(--ink-1);
+}
+
+.pk-identity-badge .pk-identity-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--interactive);
+  color: #FFFFFF;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+/* ── IntentPanel ─────────────────────────────────────────────────────────── */
+/* The approval's centerpiece: repo, exact SHA, environment, expiry,
+   evidence requirements — every field with ProvenanceChip */
+
+.pk-intent-panel {
+  background: var(--surface-1);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.pk-intent-panel-header {
+  padding: var(--space-lg);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--rule);
+}
+
+.pk-intent-panel-header h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--ink-1);
+  margin-bottom: var(--space-xs);
+}
+
+.pk-intent-panel-body {
+  padding: var(--space-lg);
+}
+
+.pk-intent-field {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-md);
+  padding: var(--space-sm) 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.pk-intent-field:last-child {
+  border-bottom: none;
+}
+
+.pk-intent-field-label {
+  flex-shrink: 0;
+  width: 180px;
+  font-size: 0.8125rem;
+  color: var(--ink-3);
+  font-weight: 500;
+}
+
+.pk-intent-field-value {
+  flex: 1;
+  font-size: 0.875rem;
+  color: var(--ink-1);
+}
+
+.pk-intent-field-value .pk-hash-field {
+  font-size: 0.8125rem;
+}
+
+/* ── StateTimeline ───────────────────────────────────────────────────────── */
+
+.pk-state-timeline {
+  position: relative;
+  padding-left: 24px;
+}
+
+.pk-state-timeline::before {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: var(--rule);
+}
+
+.pk-timeline-item {
+  position: relative;
+  padding: var(--space-sm) 0 var(--space-md) var(--space-lg);
+}
+
+.pk-timeline-item::before {
+  content: "";
+  position: absolute;
+  left: -20px;
+  top: 8px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--rule);
+  border: 1px solid var(--surface-1);
+}
+
+.pk-timeline-item.pk-timeline-item--active::before {
+  background: var(--interactive);
+}
+
+.pk-timeline-item.pk-timeline-item--complete::before {
+  background: var(--status-met);
+}
+
+.pk-timeline-item.pk-timeline-item--quarantine::before {
+  background: var(--status-indeterminate);
+}
+
+.pk-timeline-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--ink-1);
+}
+
+.pk-timeline-meta {
+  font-size: 0.75rem;
+  color: var(--ink-3);
+  margin-top: 2px;
+}
+
+/* ── DimensionTable ──────────────────────────────────────────────────────── */
+/* 11 assurance rows; status, plain name, reason codes, limitations */
+
+.pk-dimension-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.pk-dimension-table th {
+  text-align: left;
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-weight: 500;
+  border-bottom: 1px solid var(--rule);
+}
+
+.pk-dimension-table td {
+  padding: var(--space-xs) var(--space-sm);
+  border-bottom: 1px solid var(--rule);
+  vertical-align: middle;
+}
+
+.pk-dimension-name {
+  font-weight: 500;
+  color: var(--ink-1);
+}
+
+.pk-dimension-question {
+  font-size: 0.75rem;
+  color: var(--ink-3);
+  margin-top: 1px;
+}
+
+/* ── GateBanner ──────────────────────────────────────────────────────────── */
+
+.pk-gate-banner {
+  padding: var(--space-md) var(--space-lg);
+  border-radius: var(--radius-md);
+  font-size: 0.875rem;
+  margin-bottom: var(--space-lg);
+}
+
+.pk-gate-banner--blocked {
+  background: color-mix(in srgb, var(--status-not-met) 8%, var(--surface-1));
+  border: 1px solid var(--status-not-met);
+  color: var(--status-not-met);
+}
+
+.pk-gate-banner--pass {
+  background: color-mix(in srgb, var(--status-met) 8%, var(--surface-1));
+  border: 1px solid var(--status-met);
+  color: var(--status-met);
+}
+
+.pk-gate-banner--attention {
+  background: color-mix(in srgb, var(--status-attention) 8%, var(--surface-1));
+  border: 1px solid var(--status-attention);
+  color: var(--status-attention);
+}
+
+.pk-gate-banner-title {
+  font-weight: 600;
+  margin-bottom: var(--space-xs);
+}
+
+.pk-gate-banner-policy {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  opacity: 0.85;
+}
+
+/* ── QuarantineBanner ────────────────────────────────────────────────────── */
+/* Violet; explains unconfirmed outcome and what happens next */
+
+.pk-quarantine-banner {
+  padding: var(--space-md) var(--space-lg);
+  background: color-mix(in srgb, var(--status-quarantine) 8%, var(--surface-1));
+  border: 1px solid var(--status-quarantine);
+  border-radius: var(--radius-md);
+  color: var(--status-quarantine);
+  font-size: 0.875rem;
+  margin-bottom: var(--space-lg);
+}
+
+.pk-quarantine-banner-title {
+  font-weight: 600;
+  margin-bottom: var(--space-xs);
+}
+
+/* ── GapCard ─────────────────────────────────────────────────────────────── */
+/* Dashed border, "Not collected" chip */
+
+.pk-gap-card {
+  border: 1px dashed var(--status-gap);
+  border-radius: var(--radius-md);
+  padding: var(--space-md) var(--space-lg);
+  margin-top: var(--space-md);
+  background: var(--surface-1);
+}
+
+.pk-gap-card-title {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--ink-1);
+  margin-bottom: var(--space-xs);
+}
+
+.pk-gap-card-detail {
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+}
+
+/* ── LimitationsStrip ────────────────────────────────────────────────────── */
+/* Non-dismissible on receipts and bundle exports */
+
+.pk-limitations-strip {
+  padding: var(--space-md) var(--space-lg);
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  margin-top: var(--space-lg);
+}
+
+.pk-limitations-strip strong {
+  color: var(--ink-1);
+}
+
+/* ── ApprovalActionBar ───────────────────────────────────────────────────── */
+/* Approve & sign (seal color, step-up trigger), Reject, Request changes */
+
+.pk-approval-actions {
+  display: flex;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+  background: var(--surface-1);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  margin-top: var(--space-lg);
+  align-items: center;
+}
+
+.pk-approval-actions .pk-btn {
+  min-width: 160px;
+}
+
+.pk-approval-actions .pk-actions-spacer {
+  flex: 1;
+}
+
+.pk-approval-actions .pk-reauth-note {
+  font-size: 0.75rem;
+  color: var(--ink-3);
+  max-width: 280px;
+  text-align: right;
+  line-height: 1.4;
+}
+
+/* ── Empty state ─────────────────────────────────────────────────────────── */
+
+.pk-empty-state {
+  text-align: center;
+  padding: var(--space-2xl) var(--space-lg);
+  color: var(--ink-3);
+  font-size: 0.875rem;
+}
+
+.pk-empty-state p {
+  margin-top: var(--space-xs);
+}
+
+/* ── Modal / Step-up overlay ─────────────────────────────────────────────── */
+
+.pk-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(28, 36, 48, 0.5);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+}
+
+.pk-overlay--visible {
+  display: flex;
+}
+
+.pk-modal {
+  background: var(--surface-1);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  padding: var(--space-xl);
+  max-width: 480px;
+  width: 90%;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+}
+
+.pk-modal h2 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--ink-1);
+  margin-bottom: var(--space-md);
+}
+
+.pk-modal p {
+  font-size: 0.875rem;
+  color: var(--ink-2);
+  margin-bottom: var(--space-lg);
+  line-height: 1.5;
+}
+
+.pk-modal-actions {
+  display: flex;
+  gap: var(--space-md);
+  justify-content: flex-end;
+}
+
+/* ── Toast ───────────────────────────────────────────────────────────────── */
+
+.pk-toast {
+  position: fixed;
+  bottom: var(--space-lg);
+  right: var(--space-lg);
+  background: var(--ink-1);
+  color: #FFFFFF;
+  padding: var(--space-sm) var(--space-lg);
+  border-radius: var(--radius-md);
+  font-size: 0.875rem;
+  z-index: 2000;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.2s, transform 0.2s;
+  pointer-events: none;
+}
+
+.pk-toast--visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+/* ── Utility ─────────────────────────────────────────────────────────────── */
+
+.pk-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+.pk-text-mono {
+  font-family: var(--font-mono);
+}
+
+.pk-text-sm {
+  font-size: 0.8125rem;
+}
+
+.pk-text-xs {
+  font-size: 0.75rem;
+}
+
+.pk-text-ink-2 {
+  color: var(--ink-2);
+}
+
+.pk-text-ink-3 {
+  color: var(--ink-3);
+}
+
+.pk-mt-sm { margin-top: var(--space-sm); }
+.pk-mt-md { margin-top: var(--space-md); }
+.pk-mt-lg { margin-top: var(--space-lg); }
+.pk-mb-sm { margin-bottom: var(--space-sm); }
+.pk-mb-md { margin-bottom: var(--space-md); }
+.pk-mb-lg { margin-bottom: var(--space-lg); }
+
+.pk-flex { display: flex; }
+.pk-flex-between { display: flex; align-items: center; justify-content: space-between; }
+.pk-gap-sm { gap: var(--space-sm); }
+.pk-gap-md { gap: var(--space-md); }
+
+/* ── Reduced motion ──────────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .pk-sidebar {
+    display: none;
+  }
+
+  .pk-main {
+    margin-left: 0;
+    padding: var(--space-md);
+  }
+
+  .pk-intent-field {
+    flex-direction: column;
+    gap: var(--space-xs);
+  }
+
+  .pk-intent-field-label {
+    width: auto;
+  }
+
+  .pk-approval-actions {
+    flex-direction: column;
+  }
+
+  .pk-approval-actions .pk-btn {
+    width: 100%;
+  }
+}

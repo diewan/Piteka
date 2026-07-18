@@ -1,0 +1,23 @@
+[package]
+name = "piteka-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+askama = { version = "0.12", features = ["serde"] }
+axum.workspace = true
+piteka-application.workspace = true
+piteka-domain.workspace = true
+piteka-api = { path = "../../apps/piteka-api" }
+piteka-ui.workspace = true
+serde = { version = "1", features = ["derive"] }
+tokio.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tokio.workspace = true
+serde_json = "1"
+tower-service = "0.3"

@@ -5,8 +5,9 @@ use async_trait::async_trait;
 use crate::digest::ContentDigest;
 use crate::error::StorageResult;
 use crate::model::{
-    AuditEvent, CasOutcome, EvidenceDescriptor, MandateProjection, ProtocolObjectRecord,
-    WebhookReceipt, WebhookRecordOutcome,
+    ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome,
+    EvidenceDescriptor, MandateProjection, ProtocolObjectRecord, WebhookReceipt,
+    WebhookRecordOutcome,
 };
 
 /// Immutable, id-addressed storage for canonical Parwana objects.
@@ -122,4 +123,68 @@ pub trait AuditLog: Send + Sync {
     ///
     /// Returns a backend error on failure.
     async fn recent(&self, limit: usize) -> StorageResult<Vec<AuditEvent>>;
+}
+
+/// Storage for action requests with optimistic-concurrency CAS on status transitions.
+#[async_trait]
+pub trait ActionRequestStore: Send + Sync {
+    /// Inserts a new action request at version 1.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the request id already exists.
+    async fn insert(&self, request: ActionRequest) -> StorageResult<()>;
+
+    /// Fetches an action request by id.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error on failure.
+    async fn get(&self, request_id: &str) -> StorageResult<Option<ActionRequest>>;
+
+    /// Returns all action requests in insertion order (bounded by caller).
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error on failure.
+    async fn list(&self) -> StorageResult<Vec<ActionRequest>>;
+
+    /// Applies a new status only if the stored version equals `expected_version`.
+    ///
+    /// Exactly one concurrent caller with the same `expected_version` can win.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error on failure.
+    async fn compare_and_swap(
+        &self,
+        request_id: &str,
+        expected_version: i64,
+        new_status: ActionRequestStatus,
+    ) -> StorageResult<CasOutcome>;
+}
+
+/// Storage for approval decisions.
+#[async_trait]
+pub trait ApprovalDecisionStore: Send + Sync {
+    /// Inserts a new approval decision.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the decision id already exists.
+    async fn insert(&self, decision: ApprovalDecision) -> StorageResult<()>;
+
+    /// Fetches a decision by id.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error on failure.
+    async fn get(&self, decision_id: &str) -> StorageResult<Option<ApprovalDecision>>;
+
+    /// Returns all decisions for a given request id.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error on failure.
+    async fn by_request(&self, request_id: &str) -> StorageResult<Vec<ApprovalDecision>>;
 }

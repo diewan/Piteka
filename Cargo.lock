@@ -1952,6 +1952,7 @@ name = "piteka"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "piteka-api",
  "piteka-application",
  "piteka-domain",
  "piteka-infra",
@@ -1959,10 +1960,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "piteka-api"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "piteka-application",
+ "piteka-domain",
+ "piteka-storage",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-service",
+ "uuid",
+]
+
+[[package]]
 name = "piteka-application"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "piteka-domain",
+ "piteka-storage",
+ "tokio",
 ]
 
 [[package]]
@@ -1999,7 +2019,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "hex",
- "piteka-domain",
  "sha2",
  "sqlx",
  "tempfile",

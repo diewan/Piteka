@@ -7,6 +7,9 @@ members = [
     "crates/piteka-parwana",
     "crates/piteka-storage",
     "crates/piteka-auth",
+    "crates/piteka-ui",
+    "apps/piteka-api",
+    "apps/piteka-web",
 ]
 resolver = "2"
 
@@ -17,6 +20,7 @@ license = "Apache-2.0"
 rust-version = "1.85"
 
 [workspace.dependencies]
+async-trait = "0.1"
 axum = "0.8"
 piteka-domain = { path = "crates/piteka-domain" }
 piteka-application = { path = "crates/piteka-application" }
@@ -24,6 +28,7 @@ piteka-infra = { path = "crates/piteka-infra" }
 piteka-parwana = { path = "crates/piteka-parwana" }
 piteka-storage = { path = "crates/piteka-storage" }
 piteka-auth = { path = "crates/piteka-auth" }
+piteka-ui = { path = "crates/piteka-ui" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 
 [package]
@@ -38,6 +43,8 @@ publish = false
 axum.workspace = true
 piteka-application.workspace = true
 piteka-infra.workspace = true
+piteka-api = { path = "apps/piteka-api" }
+piteka-web = { path = "apps/piteka-web" }
 tokio.workspace = true
 
 [dev-dependencies]
@@ -45,4 +52,3 @@ piteka-domain.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"
-

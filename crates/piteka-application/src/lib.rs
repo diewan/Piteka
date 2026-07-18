@@ -1,13 +1,19 @@
 #![forbid(unsafe_code)]
 
+pub mod action_request;
 pub mod authz;
 pub mod session;
 
+#[cfg(test)]
+mod action_request_tests;
 #[cfg(test)]
 mod authz_tests;
 #[cfg(test)]
 mod session_tests;
 
+pub use action_request::{
+    ActionRequestPorts, ActionRequestUseCase, ActionRequestUseCaseError, Approved, Proposed, Rejected, Revoked,
+};
 pub use authz::{ActionSensitivity, AuthorizationRequest, Denial, ReauthPolicy};
 pub use session::{
     AuthError, AuthenticatedSession, SessionAuthority, SessionSigner, Signature, SignatureAlgorithm,

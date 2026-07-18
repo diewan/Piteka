@@ -95,3 +95,57 @@ pub struct AuditEvent {
     /// Free-form detail for investigators.
     pub detail: String,
 }
+
+/// The current status of an action request.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ActionRequestStatus {
+    /// Awaiting an approver's decision.
+    Pending,
+    /// Approved by an authorized approver.
+    Approved,
+    /// Rejected by an authorized approver.
+    Rejected,
+    /// Approved but later revoked before dispatch.
+    Revoked,
+}
+
+/// A request for authorization to perform a consequential action.
+///
+/// Created by a requester, reviewed and decided by an approver. The
+/// `intent_id_hex` is the Parwana-canonical intent digest that the approver
+/// reviews; the approval decision is bound to that exact digest, never to
+/// free-form prompt text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActionRequest {
+    /// Opaque internal request identifier.
+    pub request_id: String,
+    /// The user id of the requester.
+    pub requested_by: String,
+    /// Parwana intent identifier (lower-case hex), if already constructed.
+    pub intent_id_hex: Option<String>,
+    /// Current status of this request.
+    pub status: ActionRequestStatus,
+    /// Creation time, Unix seconds.
+    pub created_at_unix_seconds: i64,
+}
+
+/// A human approval or rejection decision on an action request.
+///
+/// The decision is immutable once recorded; corrections are append-only
+/// superseding records. The `intent_id_hex` binds the decision to the exact
+/// intent digest the approver reviewed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApprovalDecision {
+    /// Opaque internal decision identifier.
+    pub decision_id: String,
+    /// The action request this decision applies to.
+    pub request_id: String,
+    /// The user id of the approver.
+    pub decided_by: String,
+    /// `approved` or `rejected`.
+    pub decision: String,
+    /// The intent digest the approver reviewed (lower-case hex).
+    pub intent_id_hex: Option<String>,
+    /// Decision time, Unix seconds.
+    pub decided_at_unix_seconds: i64,
+}

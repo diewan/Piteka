@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block body %}
+<div class="pk-page-header">
+  <h1>Work queue</h1>
+  <p>Actions that need your attention, filtered by your role.</p>
+</div>
+
+{% if requests.is_empty() %}
+  <div class="pk-empty-state">
+    <p>Nothing awaiting your review.</p>
+  </div>
+{% else %}
+  <table class="pk-table" aria-label="Action requests">
+    <thead>
+      <tr>
+        <th scope="col">Request</th>
+        <th scope="col">Requested by</th>
+        <th scope="col">Status</th>
+        <th scope="col">Created</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for req in requests %}
+      <tr>
+        <td>
+          <a href="/request/{{ req.id }}" aria-label="View request {{ req.id }}">
+            {{ req.id }}
+          </a>
+        </td>
+        <td>{{ req.requested_by }}</td>
+        <td>
+          <span class="pk-status-chip pk-status-chip--{{ req.status_class }}">
+            <span class="pk-status-icon" aria-hidden="true">{{ req.status_icon }}</span>
+            {{ req.status_label }}
+          </span>
+        </td>
+        <td>
+          <time datetime="{{ req.created_at_iso }}">{{ req.created_at_human }}</time>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+
+{% endblock %}

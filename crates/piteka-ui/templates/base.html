@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ title }} — Piteka</title>
+  <link rel="stylesheet" href="/assets/piteka.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="pk-app">
+    <aside class="pk-sidebar" role="navigation" aria-label="Main navigation">
+      <div class="pk-sidebar-brand">Piteka</div>
+      <ul class="pk-sidebar-nav">
+        <li><a href="/work-queue" {% if current_page == "work-queue" %}aria-current="page"{% endif %}>Work queue</a></li>
+        <li><a href="/executions" {% if current_page == "executions" %}aria-current="page"{% endif %}>Executions</a></li>
+        <li><a href="/case-files" {% if current_page == "case-files" %}aria-current="page"{% endif %}>Case files</a></li>
+        <li><a href="/verification" {% if current_page == "verification" %}aria-current="page"{% endif %}>Verification</a></li>
+        <hr class="pk-sidebar-divider">
+        <li><a href="/settings" {% if current_page == "settings" %}aria-current="page"{% endif %}>Settings</a></li>
+      </ul>
+    </aside>
+
+    <main class="pk-main" role="main">
+      {{ body }}
+    </main>
+  </div>
+
+  <!-- Step-up overlay (OV1) -->
+  <div class="pk-overlay" id="stepup-overlay" role="dialog" aria-modal="true" aria-labelledby="stepup-title">
+    <div class="pk-modal">
+      <h2 id="stepup-title">Re-authentication required</h2>
+      <p id="stepup-message">Approving an action requires step-up authentication. Enter your credentials to sign the approval.</p>
+      <form id="stepup-form" method="post" action="/api/v1/session/reauth">
+        <div class="pk-mb-md">
+          <label for="stepup-password" class="pk-text-sm" style="display:block;margin-bottom:4px;color:var(--ink-2);">Password</label>
+          <input type="password" id="stepup-password" name="password" required autocomplete="current-password"
+                 style="width:100%;padding:var(--space-sm);border:1px solid var(--rule);border-radius:var(--radius-sm);font-family:var(--font-sans);font-size:0.875rem;">
+        </div>
+        <div class="pk-modal-actions">
+          <button type="button" class="pk-btn pk-btn-secondary" id="stepup-cancel">Cancel</button>
+          <button type="submit" class="pk-btn pk-btn-seal">Confirm &amp; sign</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Toast notification -->
+  <div class="pk-toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    // Step-up overlay controls
+    (function() {
+      var overlay = document.getElementById('stepup-overlay');
+      var cancelBtn = document.getElementById('stepup-cancel');
+      var toast = document.getElementById('toast');
+
+      // Open step-up overlay
+      window.pkOpenStepUp = function(message) {
+        if (message) {
+          document.getElementById('stepup-message').textContent = message;
+        }
+        overlay.classList.add('pk-overlay--visible');
+        document.getElementById('stepup-password').focus();
+      };
+
+      // Close step-up overlay
+      window.pkCloseStepUp = function() {
+        overlay.classList.remove('pk-overlay--visible');
+      };
+
+      if (cancelBtn) {
+        cancelBtn.addEventListener('click', window.pkCloseStepUp);
+      }
+
+      // Close on Escape
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && overlay.classList.contains('pk-overlay--visible')) {
+          window.pkCloseStepUp();
+        }
+      });
+
+      // Toast notification
+      window.pkShowToast = function(message) {
+        toast.textContent = message;
+        toast.classList.add('pk-toast--visible');
+        setTimeout(function() {
+          toast.classList.remove('pk-toast--visible');
+        }, 3000);
+      };
+
+      // Hash field copy on click
+      document.addEventListener('click', function(e) {
+        var hashField = e.target.closest('.pk-hash-field');
+        if (hashField) {
+          var tooltip = hashField.querySelector('.hash-tooltip');
+          if (tooltip) {
+            var fullHash = tooltip.textContent;
+            if (navigator.clipboard) {
+              navigator.clipboard.writeText(fullHash).then(function() {
+                window.pkShowToast('Copied');
+              });
+            }
+          }
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
