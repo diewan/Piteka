@@ -27,14 +27,19 @@ pub mod postgres;
 pub use digest::ContentDigest;
 pub use error::{StorageError, StorageResult};
 pub use evidence::LocalEvidenceStore;
+pub use memory::{
+    InMemoryEvidenceNodeStore, InMemoryExecutionAttemptStore, InMemoryReceiptProjectionStore,
+};
 pub use model::{
     ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome,
-    EvidenceDescriptor, MandateProjection, ProtocolObjectRecord, WebhookReceipt,
+    EvidenceDescriptor, EvidenceNodeRecord, EvidenceSource, ExecutionAttempt, ExecutionAttemptState,
+    MandateProjection, ProtocolObjectRecord, ReceiptOutcome, ReceiptProjection, WebhookReceipt,
     WebhookRecordOutcome,
 };
 pub use ports::{
-    ActionRequestStore, ApprovalDecisionStore, AuditLog, EvidenceObjectStore, MandateProjectionStore,
-    ProtocolObjectStore, WebhookReceiptStore,
+    ActionRequestStore, ApprovalDecisionStore, AuditLog, EvidenceNodeStore, EvidenceObjectStore,
+    ExecutionAttemptStore, MandateProjectionStore, ProtocolObjectStore, ReceiptProjectionStore,
+    WebhookReceiptStore,
 };
 
 #[cfg(test)]

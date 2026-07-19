@@ -149,3 +149,169 @@ pub struct ApprovalDecision {
     /// Decision time, Unix seconds.
     pub decided_at_unix_seconds: i64,
 }
+
+// ---------------------------------------------------------------------------
+// Execution attempt and receipt projections (E-03)
+// ---------------------------------------------------------------------------
+
+/// The state of an execution attempt against a reserved mandate.
+///
+/// Mirrors the execution attempt state machine from Master Plan §10.4.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ExecutionAttemptState {
+    /// The attempt has been prepared but not yet dispatched.
+    Prepared,
+    /// The dispatch to the provider has been initiated.
+    Dispatching,
+    /// The provider has accepted the action.
+    Accepted,
+    /// The provider has explicitly rejected the action.
+    Rejected,
+    /// The outcome is ambiguous (e.g. network timeout after dispatch).
+    OutcomeAmbiguous,
+    /// Reconciliation confirmed the provider accepted.
+    ReconciledAccepted,
+    /// Reconciliation confirmed the provider did not accept.
+    ReconciledNotAccepted,
+    /// The attempt was abandoned due to unresolved ambiguity.
+    AbandonedAmbiguous,
+}
+
+impl ExecutionAttemptState {
+    /// Returns `true` if this state is terminal (no further transitions allowed).
+    #[must_use]
+    pub const fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::Accepted
+                | Self::Rejected
+                | Self::OutcomeAmbiguous
+                | Self::ReconciledAccepted
+                | Self::ReconciledNotAccepted
+                | Self::AbandonedAmbiguous
+        )
+    }
+}
+
+/// An execution attempt binding a reserved mandate to one dispatch attempt.
+///
+/// See Master Plan §10.4 for the semantic model. The raw reservation token is
+/// secret and is never written here or to exported bundles.
+///
+/// E-04: The `github_deployment_id` field records the GitHub-assigned deployment
+/// ID once the Deployments API call succeeds. This enables webhook correlation:
+/// when a deployment-status webhook arrives, Piteka can match it to the correct
+/// attempt by comparing the deployment ID in the webhook payload against this
+/// field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExecutionAttempt {
+    /// Attempt identifier, lower-case hex. Primary key.
+    pub attempt_id_hex: String,
+    /// The mandate this attempt was dispatched against.
+    pub mandate_id_hex: String,
+    /// The intent digest this attempt targets.
+    pub intent_id_hex: String,
+    /// Digest of the reservation token used for this attempt.
+    pub reservation_token_digest: String,
+    /// Identity of the executor (service identity).
+    pub executor_identity: String,
+    /// Correlation key for provider-side matching.
+    pub correlation_key: String,
+    /// When the attempt was prepared.
+    pub started_at_unix_seconds: i64,
+    /// When the dispatch boundary was crossed, if known.
+    pub dispatch_boundary_at_unix_seconds: Option<i64>,
+    /// Current state of this attempt.
+    pub state: ExecutionAttemptState,
+    /// GitHub-assigned deployment ID, set after `create_deployment` succeeds.
+    ///
+    /// E-04: This field is `None` until the provider call completes. It is the
+    /// stable reference used for webhook correlation and reconciliation.
+    pub github_deployment_id: Option<u64>,
+}
+
+/// The outcome reported by an execution receipt.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ReceiptOutcome {
+    /// The action succeeded.
+    Succeeded,
+    /// The action failed.
+    Failed,
+    /// The action was rejected by the provider.
+    Rejected,
+    /// The outcome could not be determined.
+    Unknown,
+}
+
+/// The source of an evidence node or receipt claim.
+///
+/// Master Plan §10.5: receipts MUST distinguish Piteka claims, provider
+/// observations, and verifier conclusions.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum EvidenceSource {
+    /// Claimed by Piteka (the enterprise workbench).
+    Piteka,
+    /// Observed from an external provider (e.g. GitHub).
+    Provider(String),
+    /// Verifier conclusion derived from evidence.
+    Verifier,
+}
+
+/// A structured evidence node stored locally.
+///
+/// Mirrors the four v0.1 node types from Master Plan §10.6: Claim, Observation,
+/// Attestation, and EvidenceGap. Each node records its producer, collection time,
+/// content digest, and source attribution.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EvidenceNodeRecord {
+    /// Content-addressed node identifier (lower-case hex).
+    pub node_id_hex: String,
+    /// Registered type identifier (claim, observation, attestation, gap).
+    pub registry_id: String,
+    /// The source that produced this node.
+    pub source: EvidenceSource,
+    /// Identity of the producer.
+    pub producer_identity: String,
+    /// When the evidence was collected.
+    pub collected_at_unix_seconds: i64,
+    /// When the asserted event occurred, if known.
+    pub asserted_event_at_unix_seconds: Option<i64>,
+    /// Content digest of the evidence payload.
+    pub content_digest: ContentDigest,
+    /// Registered media type.
+    pub media_type: String,
+    /// Disclosure classification.
+    pub disclosure_classification: String,
+    /// Related node IDs (canonically sorted).
+    pub relationships: Vec<String>,
+}
+
+/// A projection of an execution receipt.
+///
+/// Binds authority (mandate) to action (attempt) and reported outcome.
+/// See Master Plan §10.5 for the semantic model.
+///
+/// E-06: Extended with source attribution, evidence references, and gap tracking.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReceiptProjection {
+    /// Receipt identifier, lower-case hex. Primary key.
+    pub receipt_id_hex: String,
+    /// The mandate this receipt is about.
+    pub mandate_id_hex: String,
+    /// The intent digest this receipt is about.
+    pub intent_id_hex: String,
+    /// The attempt this receipt covers.
+    pub attempt_id_hex: String,
+    /// The reported outcome.
+    pub outcome: ReceiptOutcome,
+    /// When the receipt was produced.
+    pub created_at_unix_seconds: i64,
+    /// Evidence nodes produced at the dispatch/executor boundary.
+    pub dispatch_evidence_refs: Vec<String>,
+    /// Evidence nodes produced at the target/provider boundary.
+    pub target_evidence_refs: Vec<String>,
+    /// Evidence gaps: required evidence that is missing or unavailable.
+    pub evidence_gaps: Vec<String>,
+    /// The canonical Parwana receipt bytes, if already serialized.
+    pub canonical_bytes: Option<Vec<u8>>,
+}

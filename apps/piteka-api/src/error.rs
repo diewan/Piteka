@@ -55,6 +55,8 @@ pub enum ApiError {
     NotFound { resource: String, id: String },
     /// The request body was malformed or missing required fields.
     BadRequest { causes: Vec<ErrorCause> },
+    /// The request failed authentication (e.g., invalid webhook signature).
+    Unauthorized { code: String, message: String },
     /// The idempotency key is already in use.
     IdempotencyConflict { idempotency_key: String },
     /// The action request is in a state that does not allow the requested operation.
@@ -100,6 +102,19 @@ impl ApiError {
                 }]),
             },
         })
+    }
+
+    /// Returns a 401 Unauthorized response for authentication failures.
+    pub fn unauthorized(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::Unauthorized {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+
+    /// Returns a 500 Internal Server Error response.
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::Internal(message.into())
     }
 
     /// Returns a 409 Conflict response for a CAS conflict.
@@ -177,6 +192,18 @@ impl IntoResponse for ApiError {
                     code: "BAD_REQUEST".to_string(),
                     message: "The request body is malformed or missing required fields".to_string(),
                     causes: Some(causes.clone()),
+                },
+            ),
+            Self::Unauthorized { code, message } => (
+                StatusCode::UNAUTHORIZED,
+                ErrorDetail {
+                    code: code.clone(),
+                    message: message.clone(),
+                    causes: Some(vec![ErrorCause {
+                        code: code.clone(),
+                        message: message.clone(),
+                        source: None,
+                    }]),
                 },
             ),
             Self::IdempotencyConflict { idempotency_key } => (

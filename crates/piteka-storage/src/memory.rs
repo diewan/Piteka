@@ -13,11 +13,13 @@ use crate::digest::ContentDigest;
 use crate::error::{StorageError, StorageResult};
 use crate::model::{
     ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome, EvidenceDescriptor,
-    MandateProjection, ProtocolObjectRecord, WebhookReceipt, WebhookRecordOutcome,
+    EvidenceNodeRecord, ExecutionAttempt, ExecutionAttemptState, MandateProjection,
+    ProtocolObjectRecord, ReceiptProjection, WebhookReceipt, WebhookRecordOutcome,
 };
 use crate::ports::{
-    ActionRequestStore, ApprovalDecisionStore, AuditLog, EvidenceObjectStore,
-    MandateProjectionStore, ProtocolObjectStore, WebhookReceiptStore,
+    ActionRequestStore, ApprovalDecisionStore, AuditLog, EvidenceNodeStore, EvidenceObjectStore,
+    ExecutionAttemptStore, MandateProjectionStore, ProtocolObjectStore, ReceiptProjectionStore,
+    WebhookReceiptStore,
 };
 
 /// In-memory immutable protocol-object store.
@@ -194,6 +196,74 @@ impl EvidenceObjectStore for InMemoryEvidenceStore {
     }
 }
 
+/// In-memory structured evidence node store.
+#[derive(Default)]
+pub struct InMemoryEvidenceNodeStore {
+    nodes: Mutex<HashMap<String, EvidenceNodeRecord>>,
+    by_mandate: Mutex<HashMap<String, Vec<String>>>,
+}
+
+#[async_trait]
+impl EvidenceNodeStore for InMemoryEvidenceNodeStore {
+    async fn insert(&self, node: EvidenceNodeRecord) -> StorageResult<()> {
+        if node.node_id_hex.is_empty() {
+            return Err(StorageError::EmptyField("node_id_hex"));
+        }
+        let mut nodes = self.nodes.lock().expect("lock poisoned");
+        if nodes.contains_key(&node.node_id_hex) {
+            return Err(StorageError::Backend(format!(
+                "evidence node `{}` already exists",
+                node.node_id_hex
+            )));
+        }
+        nodes.insert(node.node_id_hex.clone(), node.clone());
+        // Index by mandate prefix (nodes are stored with "ev-<mandate_id_hex>-..." prefix)
+        for mandate_id in MANDATE_PREFIXES {
+            if node.node_id_hex.starts_with(mandate_id) {
+                self.by_mandate
+                    .lock()
+                    .expect("lock poisoned")
+                    .entry(mandate_id.to_string())
+                    .or_default()
+                    .push(node.node_id_hex.clone());
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    async fn get(&self, node_id_hex: &str) -> StorageResult<Option<EvidenceNodeRecord>> {
+        Ok(self
+            .nodes
+            .lock()
+            .expect("lock poisoned")
+            .get(node_id_hex)
+            .cloned())
+    }
+
+    async fn by_mandate(&self, mandate_id_hex: &str) -> StorageResult<Vec<EvidenceNodeRecord>> {
+        let nodes = self.nodes.lock().expect("lock poisoned");
+        if mandate_id_hex.is_empty() {
+            Ok(nodes.values().cloned().collect())
+        } else {
+            let ids = self
+                .by_mandate
+                .lock()
+                .expect("lock poisoned")
+                .get(mandate_id_hex)
+                .cloned()
+                .unwrap_or_default();
+            Ok(ids
+                .iter()
+                .filter_map(|id| nodes.get(id).cloned())
+                .collect())
+        }
+    }
+}
+
+/// Prefixes used to index evidence nodes by mandate.
+const MANDATE_PREFIXES: &[&str] = &["mand-"];
+
 /// In-memory append-only audit log.
 #[derive(Default)]
 pub struct InMemoryAuditLog {
@@ -336,6 +406,154 @@ impl ApprovalDecisionStore for InMemoryApprovalDecisionStore {
     }
 }
 
+/// In-memory execution attempt store.
+#[derive(Default)]
+pub struct InMemoryExecutionAttemptStore {
+    attempts: Mutex<HashMap<String, ExecutionAttempt>>,
+    by_mandate: Mutex<HashMap<String, Vec<String>>>,
+}
+
+#[async_trait]
+impl ExecutionAttemptStore for InMemoryExecutionAttemptStore {
+    async fn insert(&self, attempt: ExecutionAttempt) -> StorageResult<()> {
+        if attempt.attempt_id_hex.is_empty() {
+            return Err(StorageError::EmptyField("attempt_id_hex"));
+        }
+        let mut attempts = self.attempts.lock().expect("lock poisoned");
+        if attempts.contains_key(&attempt.attempt_id_hex) {
+            return Err(StorageError::Backend(format!(
+                "execution attempt `{}` already exists",
+                attempt.attempt_id_hex
+            )));
+        }
+        attempts.insert(attempt.attempt_id_hex.clone(), attempt.clone());
+        self.by_mandate
+            .lock()
+            .expect("lock poisoned")
+            .entry(attempt.mandate_id_hex.clone())
+            .or_default()
+            .push(attempt.attempt_id_hex);
+        Ok(())
+    }
+
+    async fn get(&self, attempt_id_hex: &str) -> StorageResult<Option<ExecutionAttempt>> {
+        Ok(self
+            .attempts
+            .lock()
+            .expect("lock poisoned")
+            .get(attempt_id_hex)
+            .cloned())
+    }
+
+    async fn update_state(
+        &self,
+        attempt_id_hex: &str,
+        new_state: ExecutionAttemptState,
+    ) -> StorageResult<()> {
+        let mut attempts = self.attempts.lock().expect("lock poisoned");
+        let Some(attempt) = attempts.get_mut(attempt_id_hex) else {
+            return Err(StorageError::Backend(format!(
+                "execution attempt `{attempt_id_hex}` not found"
+            )));
+        };
+        attempt.state = new_state;
+        Ok(())
+    }
+
+    async fn update_deployment_id(
+        &self,
+        attempt_id_hex: &str,
+        deployment_id: u64,
+    ) -> StorageResult<()> {
+        let mut attempts = self.attempts.lock().expect("lock poisoned");
+        let Some(attempt) = attempts.get_mut(attempt_id_hex) else {
+            return Err(StorageError::Backend(format!(
+                "execution attempt `{attempt_id_hex}` not found"
+            )));
+        };
+        attempt.github_deployment_id = Some(deployment_id);
+        Ok(())
+    }
+
+    async fn by_mandate(&self, mandate_id_hex: &str) -> StorageResult<Vec<ExecutionAttempt>> {
+        let attempts = self.attempts.lock().expect("lock poisoned");
+        let ids = self
+            .by_mandate
+            .lock()
+            .expect("lock poisoned")
+            .get(mandate_id_hex)
+            .cloned()
+            .unwrap_or_default();
+        Ok(ids
+            .iter()
+            .filter_map(|id| attempts.get(id).cloned())
+            .collect())
+    }
+
+    async fn by_deployment_id(&self, deployment_id: u64) -> StorageResult<Option<ExecutionAttempt>> {
+        let attempts = self.attempts.lock().expect("lock poisoned");
+        Ok(attempts
+            .values()
+            .find(|a| a.github_deployment_id == Some(deployment_id))
+            .cloned())
+    }
+}
+
+/// In-memory receipt projection store.
+#[derive(Default)]
+pub struct InMemoryReceiptProjectionStore {
+    receipts: Mutex<HashMap<String, ReceiptProjection>>,
+    by_mandate: Mutex<HashMap<String, Vec<String>>>,
+}
+
+#[async_trait]
+impl ReceiptProjectionStore for InMemoryReceiptProjectionStore {
+    async fn insert(&self, receipt: ReceiptProjection) -> StorageResult<()> {
+        if receipt.receipt_id_hex.is_empty() {
+            return Err(StorageError::EmptyField("receipt_id_hex"));
+        }
+        let mut receipts = self.receipts.lock().expect("lock poisoned");
+        if receipts.contains_key(&receipt.receipt_id_hex) {
+            return Err(StorageError::Backend(format!(
+                "receipt projection `{}` already exists",
+                receipt.receipt_id_hex
+            )));
+        }
+        receipts.insert(receipt.receipt_id_hex.clone(), receipt.clone());
+        self.by_mandate
+            .lock()
+            .expect("lock poisoned")
+            .entry(receipt.mandate_id_hex.clone())
+            .or_default()
+            .push(receipt.receipt_id_hex);
+        Ok(())
+    }
+
+    async fn get(&self, receipt_id_hex: &str) -> StorageResult<Option<ReceiptProjection>> {
+        Ok(self
+            .receipts
+            .lock()
+            .expect("lock poisoned")
+            .get(receipt_id_hex)
+            .cloned())
+    }
+
+    async fn by_mandate(&self, mandate_id_hex: &str) -> StorageResult<Vec<ReceiptProjection>> {
+        let receipts = self.receipts.lock().expect("lock poisoned");
+        let ids = self
+            .by_mandate
+            .lock()
+            .expect("lock poisoned")
+            .get(mandate_id_hex)
+            .cloned()
+            .unwrap_or_default();
+        Ok(ids
+            .iter()
+            .filter_map(|id| receipts.get(id).cloned())
+            .collect())
+    }
+}
+
 // Blanket impl: Arc<T> implements the store traits when T does.
 #[async_trait]
 impl ActionRequestStore for std::sync::Arc<InMemoryActionRequestStore> {
@@ -373,5 +591,104 @@ impl AuditLog for std::sync::Arc<InMemoryAuditLog> {
     }
     async fn recent(&self, limit: usize) -> StorageResult<Vec<AuditEvent>> {
         self.as_ref().recent(limit).await
+    }
+}
+
+#[async_trait]
+impl WebhookReceiptStore for std::sync::Arc<InMemoryWebhookReceiptStore> {
+    async fn record(&self, receipt: WebhookReceipt) -> StorageResult<WebhookRecordOutcome> {
+        self.as_ref().record(receipt).await
+    }
+    async fn get(&self, delivery_id: &str) -> StorageResult<Option<WebhookReceipt>> {
+        self.as_ref().get(delivery_id).await
+    }
+}
+
+#[async_trait]
+impl EvidenceNodeStore for std::sync::Arc<InMemoryEvidenceNodeStore> {
+    async fn insert(&self, node: EvidenceNodeRecord) -> StorageResult<()> {
+        self.as_ref().insert(node).await
+    }
+    async fn get(&self, node_id_hex: &str) -> StorageResult<Option<EvidenceNodeRecord>> {
+        self.as_ref().get(node_id_hex).await
+    }
+    async fn by_mandate(&self, mandate_id_hex: &str) -> StorageResult<Vec<EvidenceNodeRecord>> {
+        self.as_ref().by_mandate(mandate_id_hex).await
+    }
+}
+
+#[async_trait]
+impl ReceiptProjectionStore for std::sync::Arc<InMemoryReceiptProjectionStore> {
+    async fn insert(&self, receipt: ReceiptProjection) -> StorageResult<()> {
+        self.as_ref().insert(receipt).await
+    }
+    async fn get(&self, receipt_id_hex: &str) -> StorageResult<Option<ReceiptProjection>> {
+        self.as_ref().get(receipt_id_hex).await
+    }
+    async fn by_mandate(&self, mandate_id_hex: &str) -> StorageResult<Vec<ReceiptProjection>> {
+        self.as_ref().by_mandate(mandate_id_hex).await
+    }
+}
+
+#[async_trait]
+impl ExecutionAttemptStore for std::sync::Arc<InMemoryExecutionAttemptStore> {
+    async fn insert(&self, attempt: ExecutionAttempt) -> StorageResult<()> {
+        self.as_ref().insert(attempt).await
+    }
+    async fn get(&self, attempt_id_hex: &str) -> StorageResult<Option<ExecutionAttempt>> {
+        self.as_ref().get(attempt_id_hex).await
+    }
+    async fn update_state(&self, attempt_id_hex: &str, new_state: ExecutionAttemptState) -> StorageResult<()> {
+        self.as_ref().update_state(attempt_id_hex, new_state).await
+    }
+    async fn update_deployment_id(&self, attempt_id_hex: &str, deployment_id: u64) -> StorageResult<()> {
+        self.as_ref().update_deployment_id(attempt_id_hex, deployment_id).await
+    }
+    async fn by_mandate(&self, mandate_id_hex: &str) -> StorageResult<Vec<ExecutionAttempt>> {
+        self.as_ref().by_mandate(mandate_id_hex).await
+    }
+    async fn by_deployment_id(&self, deployment_id: u64) -> StorageResult<Option<ExecutionAttempt>> {
+        self.as_ref().by_deployment_id(deployment_id).await
+    }
+}
+
+#[async_trait]
+impl ProtocolObjectStore for std::sync::Arc<InMemoryProtocolObjectStore> {
+    async fn put(&self, record: ProtocolObjectRecord) -> StorageResult<()> {
+        self.as_ref().put(record).await
+    }
+    async fn get(&self, object_id_hex: &str) -> StorageResult<Option<ProtocolObjectRecord>> {
+        self.as_ref().get(object_id_hex).await
+    }
+}
+
+#[async_trait]
+impl EvidenceObjectStore for std::sync::Arc<InMemoryEvidenceStore> {
+    async fn put(&self, bytes: &[u8]) -> StorageResult<ContentDigest> {
+        self.as_ref().put(bytes).await
+    }
+    async fn get(&self, digest: &ContentDigest) -> StorageResult<Option<Vec<u8>>> {
+        self.as_ref().get(digest).await
+    }
+    async fn put_descriptor(&self, descriptor: EvidenceDescriptor) -> StorageResult<()> {
+        self.as_ref().put_descriptor(descriptor).await
+    }
+}
+
+#[async_trait]
+impl MandateProjectionStore for std::sync::Arc<InMemoryMandateProjectionStore> {
+    async fn insert(&self, mandate_id_hex: &str, state: &str) -> StorageResult<()> {
+        self.as_ref().insert(mandate_id_hex, state).await
+    }
+    async fn get(&self, mandate_id_hex: &str) -> StorageResult<Option<MandateProjection>> {
+        self.as_ref().get(mandate_id_hex).await
+    }
+    async fn compare_and_swap(
+        &self,
+        mandate_id_hex: &str,
+        expected_version: i64,
+        new_state: &str,
+    ) -> StorageResult<CasOutcome> {
+        self.as_ref().compare_and_swap(mandate_id_hex, expected_version, new_state).await
     }
 }

@@ -1,0 +1,72 @@
+[package]
+name = "piteka-github"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# GitHub App installation adapter for Piteka.
+#
+# This crate implements the [`GitHubAppPort`] trait from `piteka-ports`. It
+# handles:
+#
+# - GitHub App JWT token generation and signing
+# - Webhook signature verification (HMAC-SHA256)
+# - Deployments API calls for dispatching approved mandates
+# - Secret resolution through a pluggable [`GitHubSecretResolver`]
+#
+# # Secret management (E-01 acceptance)
+#
+# Piteka never stores raw GitHub App private key bytes. This adapter accepts
+# a [`GitHubSecretReference`] and resolves it at runtime through the
+# `GitHubSecretResolver` trait. The resolver is injected at construction time
+# and may point to a KMS, vault, or local file (dev only).
+#
+# # Rotation path
+#
+# To rotate the GitHub App secret:
+#
+# 1. Generate a new private key in the GitHub App settings.
+# 2. Store the new key in the secret resolver's backing store under a new
+#    reference (or update the existing reference's resolved value).
+# 3. Update the `GitHubSecretReference` stored in Piteka's configuration
+#    to point to the new secret.
+# 4. Restart Piteka (or reload configuration) so the new adapter instance
+#    picks up the updated reference.
+#
+# Active mandates and deployments are unaffected because they reference the
+# stable [`GitHubInstallationContext`], not the secret itself. Only new
+# API calls (dispatches, webhook verification) use the rotated secret.
+#
+# # Least privilege
+#
+# The GitHub App should be configured with:
+#
+# - **Deployments**: Read and write (to create and monitor deployments)
+# - **Repository contents**: Read-only (to verify committed SHAs)
+# - **Webhooks**: Not required for the App itself
+#
+# The App should be scoped to the specific repository used in the demo.
+
+[dependencies]
+async-trait.workspace = true
+piteka-domain.workspace = true
+piteka-ports.workspace = true
+piteka-parwana.workspace = true
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+thiserror = "2"
+base64 = "0.22"
+rsa = { version = "0.9", features = ["pem"] }
+pkcs8 = { version = "0.10", features = ["pem"] }
+rand = "0.8"
+time = { version = "0.3", features = ["macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

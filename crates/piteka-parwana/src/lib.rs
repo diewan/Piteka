@@ -37,7 +37,8 @@ pub mod protocol {
         ActionIntent, ActionIntentWire, ActionMandate, AssuranceProfile,
         CanonicalAccountabilityObjectWire, DisputeBundle, EvidenceNode, ExecutionAttempt,
         ExecutionReceipt, GateProfileId, GitHubDeploymentIntentV1, GitHubDeploymentIntentV1Wire,
-        MandateSignatureEnvelope, RequiredContexts, RequiredContextsWire, VerificationContext,
+        IntentError, MandateSignatureEnvelope, ObjectVersion, ProtocolVersion, RequiredContexts,
+        RequiredContextsWire, VerificationContext,
     };
 }
 

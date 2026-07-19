@@ -6,8 +6,8 @@ use crate::digest::ContentDigest;
 use crate::error::StorageResult;
 use crate::model::{
     ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome,
-    EvidenceDescriptor, MandateProjection, ProtocolObjectRecord, WebhookReceipt,
-    WebhookRecordOutcome,
+    EvidenceDescriptor, EvidenceNodeRecord, ExecutionAttempt, MandateProjection, ProtocolObjectRecord,
+    ReceiptProjection, WebhookReceipt, WebhookRecordOutcome,
 };
 
 /// Immutable, id-addressed storage for canonical Parwana objects.
@@ -107,6 +107,34 @@ pub trait EvidenceObjectStore: Send + Sync {
     async fn put_descriptor(&self, descriptor: EvidenceDescriptor) -> StorageResult<()>;
 }
 
+/// Storage for structured evidence nodes (Master Plan §10.6).
+///
+/// Evidence nodes are append-only; each node is keyed by its content address.
+#[async_trait]
+pub trait EvidenceNodeStore: Send + Sync {
+    /// Inserts a new evidence node.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the node id already exists.
+    async fn insert(&self, node: EvidenceNodeRecord) -> StorageResult<()>;
+
+    /// Fetches an evidence node by id.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error on failure.
+    async fn get(&self, node_id_hex: &str) -> StorageResult<Option<EvidenceNodeRecord>>;
+
+    /// Returns all evidence nodes for a given mandate id (by scanning node ids
+    /// that start with the mandate prefix).
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error on failure.
+    async fn by_mandate(&self, mandate_id_hex: &str) -> StorageResult<Vec<EvidenceNodeRecord>>;
+}
+
 /// Append-only audit event storage.
 #[async_trait]
 pub trait AuditLog: Send + Sync {
@@ -187,4 +215,99 @@ pub trait ApprovalDecisionStore: Send + Sync {
     ///
     /// Returns a backend error on failure.
     async fn by_request(&self, request_id: &str) -> StorageResult<Vec<ApprovalDecision>>;
+}
+
+/// Storage for execution attempts.
+///
+/// Each attempt is keyed by a unique `attempt_id_hex`. The store is append-only
+/// for new attempts; state transitions are done by updating the existing row.
+#[async_trait]
+pub trait ExecutionAttemptStore: Send + Sync {
+    /// Inserts a new execution attempt at version 1.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the attempt id already exists.
+    async fn insert(&self, attempt: ExecutionAttempt) -> StorageResult<()>;
+
+    /// Fetches an execution attempt by id.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error on failure.
+    async fn get(&self, attempt_id_hex: &str) -> StorageResult<Option<ExecutionAttempt>>;
+
+    /// Updates the state of an existing attempt.
+    ///
+    /// Fails if the attempt does not exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error on failure.
+    async fn update_state(
+        &self,
+        attempt_id_hex: &str,
+        new_state: crate::model::ExecutionAttemptState,
+    ) -> StorageResult<()>;
+
+    /// Records the GitHub deployment ID after a successful `create_deployment` call.
+    ///
+    /// E-04: This method is called after the provider dispatch succeeds. It
+    /// records the GitHub-assigned deployment ID so that incoming webhooks
+    /// can be correlated to the correct execution attempt.
+    ///
+    /// Fails if the attempt does not exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error on failure.
+    async fn update_deployment_id(
+        &self,
+        attempt_id_hex: &str,
+        deployment_id: u64,
+    ) -> StorageResult<()>;
+
+    /// Returns all attempts for a given mandate id.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error on failure.
+    async fn by_mandate(&self, mandate_id_hex: &str) -> StorageResult<Vec<ExecutionAttempt>>;
+
+    /// Finds an execution attempt by its GitHub deployment ID.
+    ///
+    /// E-06: Used by the webhook processor to match incoming deployment-status
+    /// webhooks to the correct execution attempt.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error on failure.
+    async fn by_deployment_id(&self, deployment_id: u64) -> StorageResult<Option<ExecutionAttempt>>;
+}
+
+/// Storage for receipt projections.
+///
+/// Receipts are append-only; each receipt is keyed by a unique `receipt_id_hex`.
+#[async_trait]
+pub trait ReceiptProjectionStore: Send + Sync {
+    /// Inserts a new receipt projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the receipt id already exists.
+    async fn insert(&self, receipt: ReceiptProjection) -> StorageResult<()>;
+
+    /// Fetches a receipt by id.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error on failure.
+    async fn get(&self, receipt_id_hex: &str) -> StorageResult<Option<ReceiptProjection>>;
+
+    /// Returns all receipts for a given mandate id.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error on failure.
+    async fn by_mandate(&self, mandate_id_hex: &str) -> StorageResult<Vec<ReceiptProjection>>;
 }

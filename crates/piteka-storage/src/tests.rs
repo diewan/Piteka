@@ -7,15 +7,16 @@ use crate::digest::ContentDigest;
 use crate::error::StorageError;
 use crate::evidence::LocalEvidenceStore;
 use crate::memory::{
-    InMemoryAuditLog, InMemoryMandateProjectionStore, InMemoryProtocolObjectStore,
-    InMemoryWebhookReceiptStore,
+    InMemoryAuditLog, InMemoryExecutionAttemptStore, InMemoryMandateProjectionStore,
+    InMemoryProtocolObjectStore, InMemoryReceiptProjectionStore, InMemoryWebhookReceiptStore,
 };
 use crate::model::{
-    AuditEvent, CasOutcome, EvidenceDescriptor, ProtocolObjectRecord, WebhookReceipt,
-    WebhookRecordOutcome,
+    AuditEvent, CasOutcome, EvidenceDescriptor, ExecutionAttempt, ExecutionAttemptState,
+    ProtocolObjectRecord, ReceiptOutcome, ReceiptProjection, WebhookReceipt, WebhookRecordOutcome,
 };
 use crate::ports::{
-    AuditLog, EvidenceObjectStore, MandateProjectionStore, ProtocolObjectStore, WebhookReceiptStore,
+    AuditLog, EvidenceObjectStore, ExecutionAttemptStore, MandateProjectionStore,
+    ProtocolObjectStore, ReceiptProjectionStore, WebhookReceiptStore,
 };
 
 fn record(id: &str, bytes: &[u8]) -> ProtocolObjectRecord {
@@ -189,4 +190,186 @@ fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()
         }
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Execution attempt and receipt projection tests (E-03)
+// ---------------------------------------------------------------------------
+
+fn make_attempt(id: &str, mandate: &str) -> ExecutionAttempt {
+    ExecutionAttempt {
+        attempt_id_hex: id.to_string(),
+        mandate_id_hex: mandate.to_string(),
+        intent_id_hex: "intent-abc123".to_string(),
+        reservation_token_digest: "tok-digest".to_string(),
+        executor_identity: "piteka-worker".to_string(),
+        correlation_key: "corr-1".to_string(),
+        started_at_unix_seconds: 1_000,
+        dispatch_boundary_at_unix_seconds: None,
+        state: ExecutionAttemptState::Prepared,
+        github_deployment_id: None,
+    }
+}
+
+#[tokio::test]
+async fn execution_attempts_are_append_only() {
+    let store = InMemoryExecutionAttemptStore::default();
+
+    store.insert(make_attempt("att-1", "m1")).await.unwrap();
+    store.insert(make_attempt("att-2", "m1")).await.unwrap();
+
+    // Duplicate id is rejected.
+    let err = store.insert(make_attempt("att-1", "m1")).await.unwrap_err();
+    assert!(err.to_string().contains("already exists"));
+
+    // Both attempts are retrievable.
+    assert!(store.get("att-1").await.unwrap().is_some());
+    assert!(store.get("att-2").await.unwrap().is_some());
+    assert!(store.get("att-missing").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn execution_attempt_state_transitions_are_recorded() {
+    let store = InMemoryExecutionAttemptStore::default();
+    store.insert(make_attempt("att-1", "m1")).await.unwrap();
+
+    store
+        .update_state("att-1", ExecutionAttemptState::Dispatching)
+        .await
+        .unwrap();
+
+    let attempt = store.get("att-1").await.unwrap().unwrap();
+    assert_eq!(attempt.state, ExecutionAttemptState::Dispatching);
+
+    // Updating a non-existent attempt fails.
+    let err = store
+        .update_state("att-missing", ExecutionAttemptState::Accepted)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("not found"));
+}
+
+#[tokio::test]
+async fn execution_attempts_queryable_by_mandate() {
+    let store = InMemoryExecutionAttemptStore::default();
+    store.insert(make_attempt("att-1", "m1")).await.unwrap();
+    store.insert(make_attempt("att-2", "m1")).await.unwrap();
+    store.insert(make_attempt("att-3", "m2")).await.unwrap();
+
+    let m1_attempts = store.by_mandate("m1").await.unwrap();
+    assert_eq!(m1_attempts.len(), 2);
+
+    let m2_attempts = store.by_mandate("m2").await.unwrap();
+    assert_eq!(m2_attempts.len(), 1);
+
+    let empty = store.by_mandate("m3").await.unwrap();
+    assert!(empty.is_empty());
+}
+
+#[tokio::test]
+async fn execution_attempts_queryable_by_deployment_id() {
+    let store = InMemoryExecutionAttemptStore::default();
+    
+    let mut attempt1 = make_attempt("att-1", "m1");
+    attempt1.github_deployment_id = Some(12345);
+    store.insert(attempt1).await.unwrap();
+    
+    store.insert(make_attempt("att-2", "m1")).await.unwrap();
+    store.insert(make_attempt("att-3", "m2")).await.unwrap();
+
+    let found = store.by_deployment_id(12345).await.unwrap();
+    assert!(found.is_some());
+    assert_eq!(found.unwrap().attempt_id_hex, "att-1");
+
+    let not_found = store.by_deployment_id(99999).await.unwrap();
+    assert!(not_found.is_none());
+}
+
+#[tokio::test]
+async fn receipt_projections_are_append_only() {
+    let store = InMemoryReceiptProjectionStore::default();
+
+    store.insert(ReceiptProjection {
+        receipt_id_hex: "rcpt-1".to_string(),
+        mandate_id_hex: "m1".to_string(),
+        intent_id_hex: "intent-abc123".to_string(),
+        attempt_id_hex: "att-1".to_string(),
+        outcome: ReceiptOutcome::Succeeded,
+        created_at_unix_seconds: 2_000,
+        dispatch_evidence_refs: vec![],
+        target_evidence_refs: vec![],
+        evidence_gaps: vec![],
+        canonical_bytes: None,
+    })
+    .await
+    .unwrap();
+
+    // Duplicate id is rejected.
+    let err = store.insert(ReceiptProjection {
+        receipt_id_hex: "rcpt-1".to_string(),
+        mandate_id_hex: "m1".to_string(),
+        intent_id_hex: "intent-abc123".to_string(),
+        attempt_id_hex: "att-1".to_string(),
+        outcome: ReceiptOutcome::Failed,
+        created_at_unix_seconds: 2_001,
+        dispatch_evidence_refs: vec![],
+        target_evidence_refs: vec![],
+        evidence_gaps: vec![],
+        canonical_bytes: None,
+    })
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains("already exists"));
+}
+
+#[tokio::test]
+async fn receipts_queryable_by_mandate() {
+    let store = InMemoryReceiptProjectionStore::default();
+
+    store.insert(ReceiptProjection {
+        receipt_id_hex: "rcpt-1".to_string(),
+        mandate_id_hex: "m1".to_string(),
+        intent_id_hex: "intent-abc123".to_string(),
+        attempt_id_hex: "att-1".to_string(),
+        outcome: ReceiptOutcome::Succeeded,
+        created_at_unix_seconds: 2_000,
+        dispatch_evidence_refs: vec![],
+        target_evidence_refs: vec![],
+        evidence_gaps: vec![],
+        canonical_bytes: None,
+    })
+    .await
+    .unwrap();
+
+    store.insert(ReceiptProjection {
+        receipt_id_hex: "rcpt-2".to_string(),
+        mandate_id_hex: "m1".to_string(),
+        intent_id_hex: "intent-abc123".to_string(),
+        attempt_id_hex: "att-2".to_string(),
+        outcome: ReceiptOutcome::Unknown,
+        created_at_unix_seconds: 2_001,
+        dispatch_evidence_refs: vec![],
+        target_evidence_refs: vec![],
+        evidence_gaps: vec![],
+        canonical_bytes: None,
+    })
+    .await
+    .unwrap();
+
+    let receipts = store.by_mandate("m1").await.unwrap();
+    assert_eq!(receipts.len(), 2);
+    assert_eq!(receipts[0].outcome, ReceiptOutcome::Succeeded);
+    assert_eq!(receipts[1].outcome, ReceiptOutcome::Unknown);
+}
+
+#[tokio::test]
+async fn execution_attempt_state_terminal_check() {
+    assert!(!ExecutionAttemptState::Prepared.is_terminal());
+    assert!(!ExecutionAttemptState::Dispatching.is_terminal());
+    assert!(ExecutionAttemptState::Accepted.is_terminal());
+    assert!(ExecutionAttemptState::Rejected.is_terminal());
+    assert!(ExecutionAttemptState::OutcomeAmbiguous.is_terminal());
+    assert!(ExecutionAttemptState::ReconciledAccepted.is_terminal());
+    assert!(ExecutionAttemptState::ReconciledNotAccepted.is_terminal());
+    assert!(ExecutionAttemptState::AbandonedAmbiguous.is_terminal());
 }

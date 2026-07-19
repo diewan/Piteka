@@ -7,9 +7,9 @@ members = [
     "crates/piteka-parwana",
     "crates/piteka-storage",
     "crates/piteka-auth",
-    "crates/piteka-ui",
+    "crates/piteka-ports",
+    "crates/piteka-github",
     "apps/piteka-api",
-    "apps/piteka-web",
 ]
 resolver = "2"
 
@@ -28,7 +28,8 @@ piteka-infra = { path = "crates/piteka-infra" }
 piteka-parwana = { path = "crates/piteka-parwana" }
 piteka-storage = { path = "crates/piteka-storage" }
 piteka-auth = { path = "crates/piteka-auth" }
-piteka-ui = { path = "crates/piteka-ui" }
+piteka-ports = { path = "crates/piteka-ports" }
+piteka-github = { path = "crates/piteka-github" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 
 [package]
@@ -44,7 +45,6 @@ axum.workspace = true
 piteka-application.workspace = true
 piteka-infra.workspace = true
 piteka-api = { path = "apps/piteka-api" }
-piteka-web = { path = "apps/piteka-web" }
 tokio.workspace = true
 
 [dev-dependencies]

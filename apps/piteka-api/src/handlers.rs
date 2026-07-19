@@ -6,8 +6,15 @@ use axum::{
     http::{StatusCode, request::Parts},
     response::{IntoResponse, Response},
 };
+use piteka_application::bundle_export::assemble_bundle;
+use piteka_application::receipt_production::{
+    parse_deployment_status, produce_receipt_from_webhook,
+};
 use piteka_application::ActionRequestUseCase;
 use piteka_domain::UserId;
+use piteka_storage::ports::{
+    EvidenceNodeStore, EvidenceObjectStore, ProtocolObjectStore, ReceiptProjectionStore,
+};
 
 use crate::error::{ApiError, ErrorResponse};
 use crate::models::{
@@ -278,4 +285,98 @@ pub async fn revoke_action_request(
     };
 
     Json(response).into_response()
+}
+
+/// Get a receipt by id.
+///
+/// `GET /api/v1/receipts/{id}`
+///
+/// Returns the receipt projection including source attribution and evidence
+/// references, or 404 if not found.
+pub async fn get_receipt(
+    State(ports): State<TestPorts>,
+    Path(receipt_id): Path<String>,
+) -> Response {
+    match ports.receipt_store.get(&receipt_id).await {
+        Ok(Some(receipt)) => {
+            let response = serde_json::json!({
+                "receipt_id": receipt.receipt_id_hex,
+                "mandate_id": receipt.mandate_id_hex,
+                "intent_id": receipt.intent_id_hex,
+                "attempt_id": receipt.attempt_id_hex,
+                "outcome": match receipt.outcome {
+                    piteka_storage::model::ReceiptOutcome::Succeeded => "succeeded",
+                    piteka_storage::model::ReceiptOutcome::Failed => "failed",
+                    piteka_storage::model::ReceiptOutcome::Rejected => "rejected",
+                    piteka_storage::model::ReceiptOutcome::Unknown => "unknown",
+                },
+                "created_at": receipt.created_at_unix_seconds,
+                "dispatch_evidence_refs": receipt.dispatch_evidence_refs,
+                "target_evidence_refs": receipt.target_evidence_refs,
+                "evidence_gaps": receipt.evidence_gaps,
+            });
+            Json(response).into_response()
+        }
+        Ok(None) => ApiError::not_found("receipt", &receipt_id).into_response(),
+        Err(err) => ApiError::internal(&format!("storage error: {err}")).into_response(),
+    }
+}
+
+/// Export a DisputeBundle for a receipt.
+///
+/// `GET /api/v1/receipts/{id}/export`
+///
+/// Assembles a portable case file containing the receipt, evidence nodes,
+/// and gaps. Returns the bundle manifest as JSON.
+pub async fn export_bundle(
+    State(ports): State<TestPorts>,
+    Path(receipt_id): Path<String>,
+) -> Response {
+    match assemble_bundle(
+        &ports.receipt_store,
+        &ports.evidence_store,
+        &ports.evidence_blob_store,
+        &ports.protocol_store,
+        &receipt_id,
+    )
+    .await
+    {
+        Ok(bundle) => {
+            let response = serde_json::json!({
+                "bundle_id": bundle.bundle_id_hex,
+                "receipt_id": bundle.receipt_id_hex,
+                "mandate_id": bundle.mandate_id_hex,
+                "evidence_node_ids": bundle.evidence_node_ids,
+                "evidence_gap_ids": bundle.evidence_gap_ids,
+                "bundle_digest": bundle.bundle_digest.to_hex(),
+            });
+            Json(response).into_response()
+        }
+        Err(err) => ApiError::internal(&format!("bundle export failed: {err}")).into_response(),
+    }
+}
+
+/// Get the canonical receipt bytes for a receipt.
+///
+/// `GET /api/v1/receipts/{id}/canonical`
+///
+/// Returns the Parwana-canonical bytes of the receipt, if already serialized.
+pub async fn get_receipt_canonical(
+    State(ports): State<TestPorts>,
+    Path(receipt_id): Path<String>,
+) -> Response {
+    match ports.receipt_store.get(&receipt_id).await {
+        Ok(Some(receipt)) => {
+            match receipt.canonical_bytes {
+                Some(bytes) => {
+                    (StatusCode::OK, bytes).into_response()
+                }
+                None => {
+                    ApiError::not_found("canonical receipt bytes", &receipt_id).into_response()
+                }
+            }
+        }
+        Ok(None) => ApiError::not_found("receipt", &receipt_id).into_response(),
+        Err(err) => ApiError::internal(&format!("storage error: {err}")).into_response(),
+    }
 }

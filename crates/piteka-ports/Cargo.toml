@@ -1,0 +1,26 @@
+[package]
+name = "piteka-ports"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# External integration ports for Piteka.
+#
+# This crate defines the interface traits that infrastructure adapters
+# (currently `piteka-github`) implement. It has zero external dependencies
+# and lives between `piteka-domain` and the infrastructure crates in the
+# dependency graph:
+#
+#   piteka-domain → piteka-ports → piteka-github
+#
+# No application crate depends on `piteka-github` directly; they depend on
+# the port traits here. This keeps the GitHub integration swappable and
+# testable through mock implementations.
+
+[dependencies]
+async-trait = "0.1"
+piteka-domain.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

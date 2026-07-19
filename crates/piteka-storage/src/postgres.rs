@@ -11,10 +11,14 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 
 use crate::error::{StorageError, StorageResult};
 use crate::model::{
-    AuditEvent, CasOutcome, MandateProjection, ProtocolObjectRecord, WebhookReceipt,
-    WebhookRecordOutcome,
+    AuditEvent, CasOutcome, EvidenceNodeRecord, EvidenceSource, ExecutionAttempt,
+    ExecutionAttemptState, MandateProjection, ProtocolObjectRecord, ReceiptProjection,
+    ReceiptOutcome, WebhookReceipt, WebhookRecordOutcome,
 };
-use crate::ports::{AuditLog, MandateProjectionStore, ProtocolObjectStore, WebhookReceiptStore};
+use crate::ports::{
+    AuditLog, EvidenceNodeStore, ExecutionAttemptStore, MandateProjectionStore, ProtocolObjectStore,
+    ReceiptProjectionStore, WebhookReceiptStore,
+};
 
 fn backend(error: sqlx::Error) -> StorageError {
     StorageError::Backend(error.to_string())
@@ -310,5 +314,469 @@ impl AuditLog for PgAuditLog {
         }
         events.reverse(); // insertion order
         Ok(events)
+    }
+}
+
+/// Postgres execution attempt store.
+#[derive(Clone)]
+pub struct PgExecutionAttemptStore {
+    pool: PgPool,
+}
+
+impl PgExecutionAttemptStore {
+    /// Wraps a pool.
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl ExecutionAttemptStore for PgExecutionAttemptStore {
+    async fn insert(&self, attempt: ExecutionAttempt) -> StorageResult<()> {
+        if attempt.attempt_id_hex.is_empty() {
+            return Err(StorageError::EmptyField("attempt_id_hex"));
+        }
+        sqlx::query(
+            "INSERT INTO execution_attempts \
+             (attempt_id_hex, mandate_id_hex, state, created_at) \
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(&attempt.attempt_id_hex)
+        .bind(&attempt.mandate_id_hex)
+        .bind(state_to_str(&attempt.state))
+        .bind(attempt.started_at_unix_seconds)
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(())
+    }
+
+    async fn get(&self, attempt_id_hex: &str) -> StorageResult<Option<ExecutionAttempt>> {
+        let row = sqlx::query(
+            "SELECT mandate_id_hex, state, created_at, github_deployment_id \
+             FROM execution_attempts WHERE attempt_id_hex = $1",
+        )
+        .bind(attempt_id_hex)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(backend)?;
+        row.map(|row| {
+            Ok(ExecutionAttempt {
+                attempt_id_hex: attempt_id_hex.to_string(),
+                mandate_id_hex: row.try_get("mandate_id_hex").map_err(backend)?,
+                intent_id_hex: String::new(),
+                reservation_token_digest: String::new(),
+                executor_identity: String::new(),
+                correlation_key: String::new(),
+                started_at_unix_seconds: row.try_get("created_at").map_err(backend)?,
+                dispatch_boundary_at_unix_seconds: None,
+                state: str_to_state(row.try_get::<String, _>("state").map_err(backend)?),
+                github_deployment_id: row.try_get::<Option<i64>, _>("github_deployment_id")
+                    .map_err(backend)?
+                    .map(|v| v as u64),
+            })
+        })
+        .transpose()
+    }
+
+    async fn update_state(
+        &self,
+        attempt_id_hex: &str,
+        new_state: ExecutionAttemptState,
+    ) -> StorageResult<()> {
+        let updated = sqlx::query(
+            "UPDATE execution_attempts SET state = $2 WHERE attempt_id_hex = $1",
+        )
+        .bind(attempt_id_hex)
+        .bind(state_to_str(&new_state))
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        if updated.rows_affected() == 0 {
+            return Err(StorageError::Backend(format!(
+                "execution attempt `{attempt_id_hex}` not found"
+            )));
+        }
+        Ok(())
+    }
+
+    async fn update_deployment_id(
+        &self,
+        attempt_id_hex: &str,
+        deployment_id: u64,
+    ) -> StorageResult<()> {
+        let updated = sqlx::query(
+            "UPDATE execution_attempts SET github_deployment_id = $2 WHERE attempt_id_hex = $1",
+        )
+        .bind(attempt_id_hex)
+        .bind(deployment_id as i64)
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        if updated.rows_affected() == 0 {
+            return Err(StorageError::Backend(format!(
+                "execution attempt `{attempt_id_hex}` not found"
+            )));
+        }
+        Ok(())
+    }
+
+    async fn by_mandate(&self, mandate_id_hex: &str) -> StorageResult<Vec<ExecutionAttempt>> {
+        let rows = sqlx::query(
+            "SELECT attempt_id_hex, state, created_at, github_deployment_id \
+             FROM execution_attempts WHERE mandate_id_hex = $1 ORDER BY created_at",
+        )
+        .bind(mandate_id_hex)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(backend)?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(ExecutionAttempt {
+                    attempt_id_hex: row.try_get("attempt_id_hex").map_err(backend)?,
+                    mandate_id_hex: mandate_id_hex.to_string(),
+                    intent_id_hex: String::new(),
+                    reservation_token_digest: String::new(),
+                    executor_identity: String::new(),
+                    correlation_key: String::new(),
+                    started_at_unix_seconds: row.try_get("created_at").map_err(backend)?,
+                    dispatch_boundary_at_unix_seconds: None,
+                    state: str_to_state(row.try_get::<String, _>("state").map_err(backend)?),
+                    github_deployment_id: row.try_get::<Option<i64>, _>("github_deployment_id")
+                        .map_err(backend)?
+                        .map(|v| v as u64),
+                })
+            })
+            .collect()
+    }
+
+    async fn by_deployment_id(&self, deployment_id: u64) -> StorageResult<Option<ExecutionAttempt>> {
+        let row = sqlx::query(
+            "SELECT attempt_id_hex, mandate_id_hex, state, created_at, github_deployment_id \
+             FROM execution_attempts WHERE github_deployment_id = $1",
+        )
+        .bind(deployment_id as i64)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(backend)?;
+        row.map(|row| {
+            Ok(ExecutionAttempt {
+                attempt_id_hex: row.try_get("attempt_id_hex").map_err(backend)?,
+                mandate_id_hex: row.try_get("mandate_id_hex").map_err(backend)?,
+                intent_id_hex: String::new(),
+                reservation_token_digest: String::new(),
+                executor_identity: String::new(),
+                correlation_key: String::new(),
+                started_at_unix_seconds: row.try_get("created_at").map_err(backend)?,
+                dispatch_boundary_at_unix_seconds: None,
+                state: str_to_state(row.try_get::<String, _>("state").map_err(backend)?),
+                github_deployment_id: Some(deployment_id),
+            })
+        })
+        .transpose()
+    }
+}
+
+/// Postgres receipt projection store.
+#[derive(Clone)]
+pub struct PgReceiptProjectionStore {
+    pool: PgPool,
+}
+
+impl PgReceiptProjectionStore {
+    /// Wraps a pool.
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl ReceiptProjectionStore for PgReceiptProjectionStore {
+    async fn insert(&self, receipt: ReceiptProjection) -> StorageResult<()> {
+        if receipt.receipt_id_hex.is_empty() {
+            return Err(StorageError::EmptyField("receipt_id_hex"));
+        }
+        sqlx::query(
+            "INSERT INTO receipt_projections \
+             (receipt_id_hex, mandate_id_hex, outcome, created_at) \
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(&receipt.receipt_id_hex)
+        .bind(&receipt.mandate_id_hex)
+        .bind(outcome_to_str(&receipt.outcome))
+        .bind(receipt.created_at_unix_seconds)
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(())
+    }
+
+    async fn get(&self, receipt_id_hex: &str) -> StorageResult<Option<ReceiptProjection>> {
+        let row = sqlx::query(
+            "SELECT mandate_id_hex, outcome, created_at, intent_id_hex, attempt_id_hex, \
+             dispatch_evidence_refs, target_evidence_refs, evidence_gaps, canonical_bytes \
+             FROM receipt_projections WHERE receipt_id_hex = $1",
+        )
+        .bind(receipt_id_hex)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(backend)?;
+        row.map(|row| {
+            let dispatch_refs_str: String = row.try_get("dispatch_evidence_refs").map_err(backend)?;
+            let dispatch_evidence_refs: Vec<String> =
+                serde_json::from_str(&dispatch_refs_str).unwrap_or_default();
+            let target_refs_str: String = row.try_get("target_evidence_refs").map_err(backend)?;
+            let target_evidence_refs: Vec<String> =
+                serde_json::from_str(&target_refs_str).unwrap_or_default();
+            let gaps_str: String = row.try_get("evidence_gaps").map_err(backend)?;
+            let evidence_gaps: Vec<String> =
+                serde_json::from_str(&gaps_str).unwrap_or_default();
+            let canonical_bytes: Option<Vec<u8>> = row.try_get("canonical_bytes").map_err(backend)?;
+            Ok(ReceiptProjection {
+                receipt_id_hex: receipt_id_hex.to_string(),
+                mandate_id_hex: row.try_get("mandate_id_hex").map_err(backend)?,
+                intent_id_hex: row.try_get("intent_id_hex").map_err(backend)?,
+                attempt_id_hex: row.try_get("attempt_id_hex").map_err(backend)?,
+                outcome: str_to_outcome(row.try_get::<String, _>("outcome").map_err(backend)?),
+                created_at_unix_seconds: row.try_get("created_at").map_err(backend)?,
+                dispatch_evidence_refs,
+                target_evidence_refs,
+                evidence_gaps,
+                canonical_bytes,
+            })
+        })
+        .transpose()
+    }
+
+    async fn by_mandate(&self, mandate_id_hex: &str) -> StorageResult<Vec<ReceiptProjection>> {
+        let rows = sqlx::query(
+            "SELECT receipt_id_hex, outcome, created_at, intent_id_hex, attempt_id_hex, \
+             dispatch_evidence_refs, target_evidence_refs, evidence_gaps, canonical_bytes \
+             FROM receipt_projections WHERE mandate_id_hex = $1 ORDER BY created_at",
+        )
+        .bind(mandate_id_hex)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(backend)?;
+        rows.into_iter()
+            .map(|row| {
+                let dispatch_refs_str: String = row.try_get("dispatch_evidence_refs").map_err(backend)?;
+                let dispatch_evidence_refs: Vec<String> =
+                    serde_json::from_str(&dispatch_refs_str).unwrap_or_default();
+                let target_refs_str: String = row.try_get("target_evidence_refs").map_err(backend)?;
+                let target_evidence_refs: Vec<String> =
+                    serde_json::from_str(&target_refs_str).unwrap_or_default();
+                let gaps_str: String = row.try_get("evidence_gaps").map_err(backend)?;
+                let evidence_gaps: Vec<String> =
+                    serde_json::from_str(&gaps_str).unwrap_or_default();
+                let canonical_bytes: Option<Vec<u8>> = row.try_get("canonical_bytes").map_err(backend)?;
+                Ok(ReceiptProjection {
+                    receipt_id_hex: row.try_get("receipt_id_hex").map_err(backend)?,
+                    mandate_id_hex: mandate_id_hex.to_string(),
+                    intent_id_hex: row.try_get("intent_id_hex").map_err(backend)?,
+                    attempt_id_hex: row.try_get("attempt_id_hex").map_err(backend)?,
+                    outcome: str_to_outcome(row.try_get::<String, _>("outcome").map_err(backend)?),
+                    created_at_unix_seconds: row.try_get("created_at").map_err(backend)?,
+                    dispatch_evidence_refs,
+                    target_evidence_refs,
+                    evidence_gaps,
+                    canonical_bytes,
+                })
+            })
+            .collect()
+    }
+}
+
+/// Postgres structured evidence node store.
+#[derive(Clone)]
+pub struct PgEvidenceNodeStore {
+    pool: PgPool,
+}
+
+impl PgEvidenceNodeStore {
+    /// Wraps a pool.
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl EvidenceNodeStore for PgEvidenceNodeStore {
+    async fn insert(&self, node: EvidenceNodeRecord) -> StorageResult<()> {
+        if node.node_id_hex.is_empty() {
+            return Err(StorageError::EmptyField("node_id_hex"));
+        }
+        let source_str = match &node.source {
+            EvidenceSource::Piteka => "piteka",
+            EvidenceSource::Provider(_) => "provider",
+            EvidenceSource::Verifier => "verifier",
+        };
+        let asserted_at = node.asserted_event_at_unix_seconds;
+        let relationships = serde_json::to_string(&node.relationships).map_err(|e| {
+            StorageError::Backend(format!("failed to serialize relationships: {e}"))
+        })?;
+        sqlx::query(
+            "INSERT INTO evidence_nodes \
+             (node_id_hex, registry_id, source, producer_identity, collected_at, \
+              asserted_event_at, content_digest, media_type, disclosure_classification, relationships) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        )
+        .bind(&node.node_id_hex)
+        .bind(&node.registry_id)
+        .bind(source_str)
+        .bind(&node.producer_identity)
+        .bind(node.collected_at_unix_seconds)
+        .bind(asserted_at)
+        .bind(node.content_digest.to_hex())
+        .bind(&node.media_type)
+        .bind(&node.disclosure_classification)
+        .bind(relationships)
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(())
+    }
+
+    async fn get(&self, node_id_hex: &str) -> StorageResult<Option<EvidenceNodeRecord>> {
+        let row = sqlx::query(
+            "SELECT registry_id, source, producer_identity, collected_at, asserted_event_at, \
+             content_digest, media_type, disclosure_classification, relationships \
+             FROM evidence_nodes WHERE node_id_hex = $1",
+        )
+        .bind(node_id_hex)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(backend)?;
+        row.map(|row| {
+            let content_hex: String = row.try_get("content_digest").map_err(backend)?;
+            let content_digest =
+                crate::digest::ContentDigest::from_hex(&content_hex).ok_or_else(|| {
+                    StorageError::Backend("stored content_digest is not valid hex".to_string())
+                })?;
+            let relationships_str: String = row.try_get("relationships").map_err(backend)?;
+            let relationships: Vec<String> =
+                serde_json::from_str(&relationships_str).map_err(|e| {
+                    StorageError::Backend(format!("failed to deserialize relationships: {e}"))
+                })?;
+            let source_str: String = row.try_get("source").map_err(backend)?;
+            let source = match source_str.as_str() {
+                "piteka" => EvidenceSource::Piteka,
+                "verifier" => EvidenceSource::Verifier,
+                _ => EvidenceSource::Provider(source_str),
+            };
+            Ok(EvidenceNodeRecord {
+                node_id_hex: node_id_hex.to_string(),
+                registry_id: row.try_get("registry_id").map_err(backend)?,
+                source,
+                producer_identity: row.try_get("producer_identity").map_err(backend)?,
+                collected_at_unix_seconds: row.try_get("collected_at").map_err(backend)?,
+                asserted_event_at_unix_seconds: row.try_get("asserted_event_at").map_err(backend)?,
+                content_digest,
+                media_type: row.try_get("media_type").map_err(backend)?,
+                disclosure_classification: row.try_get("disclosure_classification").map_err(backend)?,
+                relationships,
+            })
+        })
+        .transpose()
+    }
+
+    async fn by_mandate(&self, mandate_id_hex: &str) -> StorageResult<Vec<EvidenceNodeRecord>> {
+        let rows = sqlx::query(
+            "SELECT node_id_hex, registry_id, source, producer_identity, collected_at, \
+             asserted_event_at, content_digest, media_type, disclosure_classification, relationships \
+             FROM evidence_nodes WHERE node_id_hex LIKE $1 ORDER BY collected_at",
+        )
+        .bind(format!("{mandate_id_hex}%"))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(backend)?;
+        rows.into_iter()
+            .map(|row| {
+                let node_id_hex: String = row.try_get("node_id_hex").map_err(backend)?;
+                let content_hex: String = row.try_get("content_digest").map_err(backend)?;
+                let content_digest =
+                    crate::digest::ContentDigest::from_hex(&content_hex).ok_or_else(|| {
+                        StorageError::Backend(
+                            "stored content_digest is not valid hex".to_string(),
+                        )
+                    })?;
+                let relationships_str: String = row.try_get("relationships").map_err(backend)?;
+                let relationships: Vec<String> =
+                    serde_json::from_str(&relationships_str).map_err(|e| {
+                        StorageError::Backend(format!("failed to deserialize relationships: {e}"))
+                    })?;
+                let source_str: String = row.try_get("source").map_err(backend)?;
+                let source = match source_str.as_str() {
+                    "piteka" => EvidenceSource::Piteka,
+                    "verifier" => EvidenceSource::Verifier,
+                    _ => EvidenceSource::Provider(source_str),
+                };
+                Ok(EvidenceNodeRecord {
+                    node_id_hex,
+                    registry_id: row.try_get("registry_id").map_err(backend)?,
+                    source,
+                    producer_identity: row.try_get("producer_identity").map_err(backend)?,
+                    collected_at_unix_seconds: row.try_get("collected_at").map_err(backend)?,
+                    asserted_event_at_unix_seconds: row.try_get("asserted_event_at").map_err(backend)?,
+                    content_digest,
+                    media_type: row.try_get("media_type").map_err(backend)?,
+                    disclosure_classification: row.try_get("disclosure_classification").map_err(backend)?,
+                    relationships,
+                })
+            })
+            .collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helper functions for state/outcome string conversion
+// ---------------------------------------------------------------------------
+
+fn state_to_str(state: &ExecutionAttemptState) -> &'static str {
+    match state {
+        ExecutionAttemptState::Prepared => "prepared",
+        ExecutionAttemptState::Dispatching => "dispatching",
+        ExecutionAttemptState::Accepted => "accepted",
+        ExecutionAttemptState::Rejected => "rejected",
+        ExecutionAttemptState::OutcomeAmbiguous => "outcome_ambiguous",
+        ExecutionAttemptState::ReconciledAccepted => "reconciled_accepted",
+        ExecutionAttemptState::ReconciledNotAccepted => "reconciled_not_accepted",
+        ExecutionAttemptState::AbandonedAmbiguous => "abandoned_ambiguous",
+    }
+}
+
+fn str_to_state(s: String) -> ExecutionAttemptState {
+    match s.as_str() {
+        "prepared" => ExecutionAttemptState::Prepared,
+        "dispatching" => ExecutionAttemptState::Dispatching,
+        "accepted" => ExecutionAttemptState::Accepted,
+        "rejected" => ExecutionAttemptState::Rejected,
+        "outcome_ambiguous" => ExecutionAttemptState::OutcomeAmbiguous,
+        "reconciled_accepted" => ExecutionAttemptState::ReconciledAccepted,
+        "reconciled_not_accepted" => ExecutionAttemptState::ReconciledNotAccepted,
+        "abandoned_ambiguous" => ExecutionAttemptState::AbandonedAmbiguous,
+        _ => ExecutionAttemptState::OutcomeAmbiguous,
+    }
+}
+
+fn outcome_to_str(outcome: &ReceiptOutcome) -> &'static str {
+    match outcome {
+        ReceiptOutcome::Succeeded => "succeeded",
+        ReceiptOutcome::Failed => "failed",
+        ReceiptOutcome::Rejected => "rejected",
+        ReceiptOutcome::Unknown => "unknown",
+    }
+}
+
+fn str_to_outcome(s: String) -> ReceiptOutcome {
+    match s.as_str() {
+        "succeeded" => ReceiptOutcome::Succeeded,
+        "failed" => ReceiptOutcome::Failed,
+        "rejected" => ReceiptOutcome::Rejected,
+        "unknown" => ReceiptOutcome::Unknown,
+        _ => ReceiptOutcome::Unknown,
     }
 }

@@ -7,8 +7,14 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait = "0.1"
+futures-util = "0.3"
 piteka-domain.workspace = true
+piteka-github.workspace = true
+piteka-ports.workspace = true
 piteka-storage.workspace = true
+sha2 = "0.10"
+thiserror = "2"
+serde_json = "1"
 
 [dev-dependencies]
 tokio.workspace = true
