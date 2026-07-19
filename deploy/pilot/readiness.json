@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "review": "H-07",
+  "reviewed_at": "2026-07-19",
+  "decision": "no-go",
+  "support_owner": "Piteka platform owner (named individual required before pilot)",
+  "dependencies": {
+    "H-04": "complete-with-open-pilot-blockers",
+    "H-05": "conditional-on-live-H-02-evidence",
+    "H-06": "awaiting-product-owner-approval"
+  },
+  "required_runbooks": [
+    "docs/runbooks/pilot-operations.md",
+    "docs/runbooks/monitoring-alerting.md",
+    "docs/runbooks/postgres-backup-restore.md",
+    "docs/runbooks/deployment-rollback.md",
+    "docs/runbooks/incident-support.md",
+    "docs/runbooks/pilot-terms-and-limitations.md"
+  ],
+  "blockers": [
+    {"id": "PILOT-01", "owner": "Piteka security owner", "condition": "Authenticated server-derived tenant isolation and cross-tenant tests are not implemented", "evidence_to_close": "Production tenant-boundary test report"},
+    {"id": "PILOT-02", "owner": "Piteka platform owner", "condition": "OIDC/service identity, KMS or Vault secret handling, rotation, revocation, and production log validation are not implemented", "evidence_to_close": "Target-environment identity and secret-rotation exercise"},
+    {"id": "PILOT-03", "owner": "Piteka release owner", "condition": "H-02 has no real controlled-environment dispatch and outside-party verification artifact", "evidence_to_close": "Signed H-02 handoff manifest and artifact digests"},
+    {"id": "PILOT-04", "owner": "Product owner", "condition": "H-06 language approval is unsigned", "evidence_to_close": "Approved H-06 decision with revision and date"},
+    {"id": "PILOT-05", "owner": "Piteka platform owner", "condition": "Target monitoring, encrypted off-site backups, and measured RPO/RTO have not been exercised", "evidence_to_close": "Alert drill and restore exercise report"},
+    {"id": "PILOT-06", "owner": "Commercial owner", "condition": "A named support owner and design-partner pilot terms have not been accepted", "evidence_to_close": "Signed support rota and pilot terms"}
+  ]
+}
