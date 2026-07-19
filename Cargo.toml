@@ -10,6 +10,7 @@ members = [
     "crates/piteka-ports",
     "crates/piteka-github",
     "crates/piteka-ui",
+    "crates/piteka-tuppira",
     "apps/piteka-api",
     "apps/piteka-mcp",
     "apps/piteka-worker",
@@ -35,6 +36,7 @@ piteka-auth = { path = "crates/piteka-auth" }
 piteka-ports = { path = "crates/piteka-ports" }
 piteka-github = { path = "crates/piteka-github" }
 piteka-ui = { path = "crates/piteka-ui" }
+piteka-tuppira = { path = "crates/piteka-tuppira" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 
 [package]

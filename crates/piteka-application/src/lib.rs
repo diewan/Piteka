@@ -5,6 +5,7 @@ pub mod authz;
 pub mod bundle_export;
 pub mod dispatch;
 pub mod mcp;
+pub mod observation;
 pub mod receipt_production;
 pub mod reconciliation;
 pub mod session;
@@ -37,6 +38,10 @@ pub use receipt_production::{
     DeploymentStatusEvent, ReceiptProductionError, ReceiptProductionResult,
     ReceiptProducingProcessor, map_github_state_to_outcome, parse_deployment_status,
     produce_receipt_from_webhook,
+};
+pub use observation::{
+    EvidenceGap, Observation, ObservationError, ObservationPort, ObservationQuery,
+    ObservationQueryResult, ObservationUseCase, SourceHealth,
 };
 pub use session::{
     AuthError, AuthenticatedSession, SessionAuthority, SessionSigner, Signature, SignatureAlgorithm,
