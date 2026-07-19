@@ -9,7 +9,11 @@ members = [
     "crates/piteka-auth",
     "crates/piteka-ports",
     "crates/piteka-github",
+    "crates/piteka-ui",
     "apps/piteka-api",
+    "apps/piteka-mcp",
+    "apps/piteka-worker",
+    "apps/piteka-web",
 ]
 resolver = "2"
 
@@ -30,6 +34,7 @@ piteka-storage = { path = "crates/piteka-storage" }
 piteka-auth = { path = "crates/piteka-auth" }
 piteka-ports = { path = "crates/piteka-ports" }
 piteka-github = { path = "crates/piteka-github" }
+piteka-ui = { path = "crates/piteka-ui" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 
 [package]

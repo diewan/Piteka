@@ -1,9 +1,9 @@
 //! Positive and adversarial tests for the first-slice API.
 
 use axum::{
-    http::{Request, StatusCode},
     Router,
     body::Body,
+    http::{Request, StatusCode},
 };
 use tower_service::Service;
 

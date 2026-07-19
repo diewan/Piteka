@@ -20,20 +20,31 @@
 pub mod pages;
 
 use askama::Template;
-use axum::{
-    Json, Router,
-    extract::{Path, Query},
-    response::Html,
-    routing::{get, post},
-};
+use axum::{Router, response::Html, routing::get};
 use piteka_application::ActionRequestUseCase;
-use piteka_domain::UserId;
-use piteka_ui::{
-    IntentPanelData, PlaceholderPage, RequestDetailPage, RequestDetailRow, WorkQueuePage,
-    WorkQueueRow,
-};
 use serde::Deserialize;
-use std::sync::Arc;
+
+/// Renders the replay-rejection evidence returned by the authoritative
+/// dispatch use case. Keeping this renderer input typed prevents navigation or
+/// browser state from manufacturing a rejection.
+pub fn render_replay_rejection(
+    rejection: &piteka_application::dispatch::ReplayRejection,
+) -> Html<String> {
+    let template = pages::ReplayRejectionTemplate {
+        title: "Repeat use rejected".to_string(),
+        current_page: "executions".to_string(),
+        reason_code: rejection.reason_code.to_string(),
+        mandate_id: rejection.mandate_id_hex.clone(),
+        executor_identity: rejection.executor_identity.clone(),
+        mandate_state: rejection.mandate_state.clone(),
+        message: rejection.message.clone(),
+    };
+    Html(
+        template
+            .render()
+            .expect("replay rejection template is valid"),
+    )
+}
 
 /// Query params for the request detail page.
 #[derive(Deserialize)]
@@ -69,34 +80,28 @@ pub fn assets_router() -> Router {
 fn format_timestamp(unix_secs: u64) -> (String, String) {
     // Simple formatting: use the raw value for ISO, a readable form for display.
     // In production, use a proper datetime crate.
-    let iso = format!("1970-01-01T00:00:00Z"); // Placeholder — would use chrono in production
+    let iso = "1970-01-01T00:00:00Z".to_string(); // Placeholder — would use chrono in production
     let human = format!("{}s", unix_secs);
     (human, iso)
 }
 
-/// Formats an expiry timestamp with an "expired" flag.
-fn format_expiry(unix_secs: u64) -> (String, bool) {
-    let human = format!("{}s", unix_secs);
-    (human, false)
-}
-
 /// Truncates a hash for display: first 6 + "…" + last 4.
 /// Used by the askama truncate_hash filter.
-pub fn truncate_hash(hash: &str) -> String {
-    if hash.len() <= 12 {
+pub fn truncate_hash(hash: &str) -> askama::Result<String> {
+    Ok(if hash.len() <= 12 {
         hash.to_string()
     } else {
         format!("{}…{}", &hash[..6], &hash[hash.len() - 4..])
-    }
+    })
 }
 
 /// Gets the first character of a string for avatar initials.
-pub fn first_char(s: &str) -> String {
-    s.chars()
+pub fn first_char(s: &str) -> askama::Result<String> {
+    Ok(s.chars()
         .next()
         .map(|c| c.to_ascii_uppercase())
         .unwrap_or('?')
-        .to_string()
+        .to_string())
 }
 
 /// Determines the status class and label for a request.

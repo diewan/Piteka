@@ -1,20 +1,14 @@
 //! Tests for bundle export (E-06).
 
+use crate::SystemClock;
 use crate::bundle_export::assemble_bundle;
-use crate::receipt_production::{
-    parse_deployment_status, produce_receipt_from_webhook,
-};
-use crate::{Clock, SystemClock};
+use crate::receipt_production::{parse_deployment_status, produce_receipt_from_webhook};
 use piteka_storage::memory::{
-    InMemoryActionRequestStore, InMemoryApprovalDecisionStore, InMemoryAuditLog,
-    InMemoryEvidenceNodeStore, InMemoryEvidenceStore, InMemoryExecutionAttemptStore,
-    InMemoryMandateProjectionStore, InMemoryProtocolObjectStore, InMemoryReceiptProjectionStore,
+    InMemoryAuditLog, InMemoryEvidenceNodeStore, InMemoryEvidenceStore,
+    InMemoryExecutionAttemptStore, InMemoryProtocolObjectStore, InMemoryReceiptProjectionStore,
 };
 use piteka_storage::model::{ExecutionAttempt, ExecutionAttemptState};
-use piteka_storage::ports::{
-    ActionRequestStore, ApprovalDecisionStore, AuditLog, EvidenceNodeStore,
-    ExecutionAttemptStore, ProtocolObjectStore, ReceiptProjectionStore,
-};
+use piteka_storage::ports::{ExecutionAttemptStore, ProtocolObjectStore, ReceiptProjectionStore};
 
 fn sample_attempt(deployment_id: u64) -> ExecutionAttempt {
     ExecutionAttempt {
@@ -32,7 +26,8 @@ fn sample_attempt(deployment_id: u64) -> ExecutionAttempt {
 }
 
 fn success_payload() -> Vec<u8> {
-    br#"{"status":"completed","state":"success","deployment":{"id":42},"updated_at":1700000000}"#.to_vec()
+    br#"{"status":"completed","state":"success","deployment":{"id":42},"updated_at":1700000000}"#
+        .to_vec()
 }
 
 #[tokio::test]
@@ -46,8 +41,6 @@ async fn assemble_bundle_success() {
     let evidence_blob_store = std::sync::Arc::new(InMemoryEvidenceStore::default());
     let audit_log = std::sync::Arc::new(InMemoryAuditLog::default());
     let protocol_store = std::sync::Arc::new(InMemoryProtocolObjectStore::default());
-    let request_store = std::sync::Arc::new(InMemoryActionRequestStore::default());
-    let approval_store = std::sync::Arc::new(InMemoryApprovalDecisionStore::default());
 
     // Insert execution attempt.
     let attempt = sample_attempt(42);
@@ -104,6 +97,46 @@ async fn assemble_bundle_receipt_not_found() {
 }
 
 #[tokio::test]
+async fn assemble_bundle_fails_closed_when_referenced_evidence_is_missing() {
+    let receipt_store = InMemoryReceiptProjectionStore::default();
+    let evidence_store = InMemoryEvidenceNodeStore::default();
+    let evidence_blob_store = InMemoryEvidenceStore::default();
+    let protocol_store = InMemoryProtocolObjectStore::default();
+
+    receipt_store
+        .insert(piteka_storage::model::ReceiptProjection {
+            receipt_id_hex: "rcpt-missing".into(),
+            mandate_id_hex: "mandate".into(),
+            intent_id_hex: "intent".into(),
+            attempt_id_hex: "attempt".into(),
+            outcome: piteka_storage::model::ReceiptOutcome::Unknown,
+            created_at_unix_seconds: 1,
+            dispatch_evidence_refs: vec!["ev-absent".into()],
+            target_evidence_refs: vec![],
+            evidence_gaps: vec![],
+            canonical_bytes: None,
+        })
+        .await
+        .unwrap();
+
+    let error = assemble_bundle(
+        &receipt_store,
+        &evidence_store,
+        &evidence_blob_store,
+        &protocol_store,
+        "rcpt-missing",
+    )
+    .await
+    .expect_err("missing referenced evidence must reject export");
+
+    assert!(matches!(
+        error,
+        crate::bundle_export::BundleExportError::IncompleteEvidence { missing, .. }
+            if missing == vec!["ev-absent"]
+    ));
+}
+
+#[tokio::test]
 async fn bundle_contains_source_attribution() {
     let clock = SystemClock;
 
@@ -113,10 +146,8 @@ async fn bundle_contains_source_attribution() {
     let evidence_blob_store = std::sync::Arc::new(InMemoryEvidenceStore::default());
     let audit_log = std::sync::Arc::new(InMemoryAuditLog::default());
     let protocol_store = std::sync::Arc::new(InMemoryProtocolObjectStore::default());
-    let request_store = std::sync::Arc::new(InMemoryActionRequestStore::default());
-    let approval_store = std::sync::Arc::new(InMemoryApprovalDecisionStore::default());
 
-    let attempt = sample_attempt(100);
+    let attempt = sample_attempt(42);
     attempt_store.insert(attempt).await.unwrap();
 
     let payload = success_payload();
@@ -147,5 +178,8 @@ async fn bundle_contains_source_attribution() {
 
     // The protocol store should contain the bundle.
     let stored = protocol_store.get(&bundle.bundle_id_hex).await.unwrap();
-    assert!(stored.is_some(), "bundle should be stored in protocol objects");
+    assert!(
+        stored.is_some(),
+        "bundle should be stored in protocol objects"
+    );
 }

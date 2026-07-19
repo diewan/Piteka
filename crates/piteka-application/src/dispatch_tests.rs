@@ -7,22 +7,17 @@
 //! - No dispatch without reservation
 //! - No replay after consumption
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::dispatch::{
-    DispatchOutcome, DispatchPorts, DispatchUseCase, Dispatched,
-};
 use crate::Clock;
+use crate::dispatch::{DispatchOutcome, DispatchPorts, DispatchUseCase, Dispatched};
 use piteka_domain::UserId;
 use piteka_storage::memory::{
     InMemoryActionRequestStore, InMemoryApprovalDecisionStore, InMemoryAuditLog,
-    InMemoryExecutionAttemptStore, InMemoryMandateProjectionStore,
-    InMemoryReceiptProjectionStore,
+    InMemoryExecutionAttemptStore, InMemoryMandateProjectionStore, InMemoryReceiptProjectionStore,
 };
-use piteka_storage::model::{
-    ExecutionAttemptState, ReceiptOutcome,
-};
+use piteka_storage::model::{ExecutionAttemptState, ReceiptOutcome};
 use piteka_storage::ports::{
     ActionRequestStore, ApprovalDecisionStore, AuditLog, ExecutionAttemptStore,
     MandateProjectionStore, ReceiptProjectionStore,
@@ -84,7 +79,10 @@ impl ActionRequestStore for TestPorts {
     async fn insert(&self, request: ActionRequest) -> Result<(), piteka_storage::StorageError> {
         self.request_store.insert(request).await
     }
-    async fn get(&self, request_id: &str) -> Result<Option<ActionRequest>, piteka_storage::StorageError> {
+    async fn get(
+        &self,
+        request_id: &str,
+    ) -> Result<Option<ActionRequest>, piteka_storage::StorageError> {
         self.request_store.get(request_id).await
     }
     async fn list(&self) -> Result<Vec<ActionRequest>, piteka_storage::StorageError> {
@@ -96,7 +94,9 @@ impl ActionRequestStore for TestPorts {
         expected_version: i64,
         new_status: ActionRequestStatus,
     ) -> Result<piteka_storage::CasOutcome, piteka_storage::StorageError> {
-        self.request_store.compare_and_swap(request_id, expected_version, new_status).await
+        self.request_store
+            .compare_and_swap(request_id, expected_version, new_status)
+            .await
     }
 }
 
@@ -105,20 +105,33 @@ impl ApprovalDecisionStore for TestPorts {
     async fn insert(&self, decision: ApprovalDecision) -> Result<(), piteka_storage::StorageError> {
         self.decision_store.insert(decision).await
     }
-    async fn get(&self, decision_id: &str) -> Result<Option<ApprovalDecision>, piteka_storage::StorageError> {
+    async fn get(
+        &self,
+        decision_id: &str,
+    ) -> Result<Option<ApprovalDecision>, piteka_storage::StorageError> {
         self.decision_store.get(decision_id).await
     }
-    async fn by_request(&self, request_id: &str) -> Result<Vec<ApprovalDecision>, piteka_storage::StorageError> {
+    async fn by_request(
+        &self,
+        request_id: &str,
+    ) -> Result<Vec<ApprovalDecision>, piteka_storage::StorageError> {
         self.decision_store.by_request(request_id).await
     }
 }
 
 #[async_trait::async_trait]
 impl MandateProjectionStore for TestPorts {
-    async fn insert(&self, mandate_id_hex: &str, state: &str) -> Result<(), piteka_storage::StorageError> {
+    async fn insert(
+        &self,
+        mandate_id_hex: &str,
+        state: &str,
+    ) -> Result<(), piteka_storage::StorageError> {
         self.mandate_store.insert(mandate_id_hex, state).await
     }
-    async fn get(&self, mandate_id_hex: &str) -> Result<Option<piteka_storage::MandateProjection>, piteka_storage::StorageError> {
+    async fn get(
+        &self,
+        mandate_id_hex: &str,
+    ) -> Result<Option<piteka_storage::MandateProjection>, piteka_storage::StorageError> {
         self.mandate_store.get(mandate_id_hex).await
     }
     async fn compare_and_swap(
@@ -127,16 +140,24 @@ impl MandateProjectionStore for TestPorts {
         expected_version: i64,
         new_state: &str,
     ) -> Result<piteka_storage::CasOutcome, piteka_storage::StorageError> {
-        self.mandate_store.compare_and_swap(mandate_id_hex, expected_version, new_state).await
+        self.mandate_store
+            .compare_and_swap(mandate_id_hex, expected_version, new_state)
+            .await
     }
 }
 
 #[async_trait::async_trait]
 impl ExecutionAttemptStore for TestPorts {
-    async fn insert(&self, attempt: piteka_storage::ExecutionAttempt) -> Result<(), piteka_storage::StorageError> {
+    async fn insert(
+        &self,
+        attempt: piteka_storage::ExecutionAttempt,
+    ) -> Result<(), piteka_storage::StorageError> {
         self.attempt_store.insert(attempt).await
     }
-    async fn get(&self, attempt_id_hex: &str) -> Result<Option<piteka_storage::ExecutionAttempt>, piteka_storage::StorageError> {
+    async fn get(
+        &self,
+        attempt_id_hex: &str,
+    ) -> Result<Option<piteka_storage::ExecutionAttempt>, piteka_storage::StorageError> {
         self.attempt_store.get(attempt_id_hex).await
     }
     async fn update_state(
@@ -144,32 +165,51 @@ impl ExecutionAttemptStore for TestPorts {
         attempt_id_hex: &str,
         new_state: ExecutionAttemptState,
     ) -> Result<(), piteka_storage::StorageError> {
-        self.attempt_store.update_state(attempt_id_hex, new_state).await
+        self.attempt_store
+            .update_state(attempt_id_hex, new_state)
+            .await
     }
     async fn update_deployment_id(
         &self,
         attempt_id_hex: &str,
         deployment_id: u64,
     ) -> Result<(), piteka_storage::StorageError> {
-        self.attempt_store.update_deployment_id(attempt_id_hex, deployment_id).await
+        self.attempt_store
+            .update_deployment_id(attempt_id_hex, deployment_id)
+            .await
     }
-    async fn by_mandate(&self, mandate_id_hex: &str) -> Result<Vec<piteka_storage::ExecutionAttempt>, piteka_storage::StorageError> {
+    async fn by_mandate(
+        &self,
+        mandate_id_hex: &str,
+    ) -> Result<Vec<piteka_storage::ExecutionAttempt>, piteka_storage::StorageError> {
         self.attempt_store.by_mandate(mandate_id_hex).await
     }
-    async fn by_deployment_id(&self, deployment_id: u64) -> Result<Option<piteka_storage::ExecutionAttempt>, piteka_storage::StorageError> {
+    async fn by_deployment_id(
+        &self,
+        deployment_id: u64,
+    ) -> Result<Option<piteka_storage::ExecutionAttempt>, piteka_storage::StorageError> {
         self.attempt_store.by_deployment_id(deployment_id).await
     }
 }
 
 #[async_trait::async_trait]
 impl ReceiptProjectionStore for TestPorts {
-    async fn insert(&self, receipt: piteka_storage::ReceiptProjection) -> Result<(), piteka_storage::StorageError> {
+    async fn insert(
+        &self,
+        receipt: piteka_storage::ReceiptProjection,
+    ) -> Result<(), piteka_storage::StorageError> {
         self.receipt_store.insert(receipt).await
     }
-    async fn get(&self, receipt_id_hex: &str) -> Result<Option<piteka_storage::ReceiptProjection>, piteka_storage::StorageError> {
+    async fn get(
+        &self,
+        receipt_id_hex: &str,
+    ) -> Result<Option<piteka_storage::ReceiptProjection>, piteka_storage::StorageError> {
         self.receipt_store.get(receipt_id_hex).await
     }
-    async fn by_mandate(&self, mandate_id_hex: &str) -> Result<Vec<piteka_storage::ReceiptProjection>, piteka_storage::StorageError> {
+    async fn by_mandate(
+        &self,
+        mandate_id_hex: &str,
+    ) -> Result<Vec<piteka_storage::ReceiptProjection>, piteka_storage::StorageError> {
         self.receipt_store.by_mandate(mandate_id_hex).await
     }
 }
@@ -218,11 +258,7 @@ fn approver() -> UserId {
 }
 
 /// Helper: create an approved action request and a mandate projection.
-async fn setup_approved_request(
-    ports: &TestPorts,
-    request_id: &str,
-    mandate_id_hex: &str,
-) {
+async fn setup_approved_request(ports: &TestPorts, request_id: &str, mandate_id_hex: &str) {
     // Create the action request in Approved status.
     let now = ports.clock.unix_seconds() as i64;
     let request = ActionRequest {
@@ -279,7 +315,12 @@ async fn reserve_succeeds_for_approved_request() {
     assert_eq!(mandate.state, "reserved");
 
     // Verify the attempt was created.
-    let attempt = ports.attempt_store.get("att-mandate-1").await.unwrap().unwrap();
+    let attempt = ports
+        .attempt_store
+        .get("att-mandate-1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(attempt.state, ExecutionAttemptState::Dispatching);
     assert_eq!(attempt.mandate_id_hex, "mandate-1");
 }
@@ -402,7 +443,7 @@ async fn complete_dispatch_consumes_mandate_on_provider_acceptance() {
         &attempt_id,
         "mandate-1",
         "intent-abc123",
-        true, // provider accepted
+        true,     // provider accepted
         Some(42), // deployment_id from GitHub
         "worker-1",
         2, // version after reserve CAS
@@ -457,7 +498,7 @@ async fn complete_dispatch_quarantines_mandate_on_provider_failure() {
         "mandate-1",
         "intent-abc123",
         false, // provider failed
-        None, // no deployment_id
+        None,  // no deployment_id
         "worker-1",
         2,
     )
@@ -664,7 +705,7 @@ async fn reservation_failed_outcome_returns_immediately() {
     .await
     .unwrap();
 
-    // Second caller gets ReservationFailed without dispatching.
+    // Second caller gets an explicit replay rejection without dispatching.
     let result = uc
         .reserve_and_dispatch(
             "req-1",
@@ -674,19 +715,12 @@ async fn reservation_failed_outcome_returns_immediately() {
             "token-2",
             "corr-2",
             1,
-            |_corr_key, _digest| {
-                panic!("dispatch_fn should not be called for reservation failure")
-            },
+            |_corr_key, _digest| panic!("dispatch_fn should not be called for reservation failure"),
         )
         .await
         .unwrap();
 
-    match result {
-        DispatchOutcome::ReservationFailed(_) => {
-            // Expected.
-        }
-        other => panic!("expected ReservationFailed, got {:?}", other),
-    }
+    assert!(matches!(result, DispatchOutcome::ReplayRejected(_)));
 
     // Verify only one attempt was created.
     let attempts = ports.attempt_store.by_mandate("mandate-1").await.unwrap();
@@ -702,6 +736,8 @@ async fn no_second_dispatch_after_consumption() {
     setup_approved_request(&ports, "req-1", "mandate-1").await;
 
     // First dispatch succeeds and consumes the mandate.
+    let provider_dispatches = Arc::new(AtomicU64::new(0));
+    let first_counter = provider_dispatches.clone();
     uc.reserve_and_dispatch(
         "req-1",
         "mandate-1",
@@ -710,14 +746,17 @@ async fn no_second_dispatch_after_consumption() {
         "token-1",
         "corr-1",
         1,
-        |_corr_key, _digest| Some(42),
+        move |_corr_key, _digest| {
+            first_counter.fetch_add(1, Ordering::SeqCst);
+            Some(42)
+        },
     )
     .await
     .unwrap();
 
     // Second dispatch attempt: mandate is already consumed.
     let result = uc
-        .reserve(
+        .reserve_and_dispatch(
             "req-1",
             "mandate-1",
             "intent-abc123",
@@ -725,16 +764,44 @@ async fn no_second_dispatch_after_consumption() {
             "token-2",
             "corr-2",
             1, // stale version
+            {
+                let provider_dispatches = provider_dispatches.clone();
+                move |_corr_key, _digest| {
+                    provider_dispatches.fetch_add(1, Ordering::SeqCst);
+                    Some(43)
+                }
+            },
         )
         .await
         .unwrap();
 
-    match result {
-        DispatchOutcome::ReservationFailed(_) => {
-            // The CAS fails because the version is already 2 (consumed).
-        }
-        other => panic!("expected ReservationFailed, got {:?}", other),
-    }
+    let rejection = match result {
+        DispatchOutcome::ReplayRejected(rejection) => rejection,
+        other => panic!("expected ReplayRejected, got {:?}", other),
+    };
+    assert_eq!(rejection.reason_code, "MANDATE.REPLAY_DETECTED");
+    assert_eq!(rejection.mandate_state, "consumed");
+    assert!(rejection.message.contains("nothing was sent to GitHub"));
+    assert_eq!(provider_dispatches.load(Ordering::SeqCst), 1);
+
+    // The rejected second call is evidence, while the provider-facing attempt
+    // journal still contains exactly one dispatch.
+    let events = ports.audit_log.recent(10).await.unwrap();
+    let replay = events
+        .iter()
+        .find(|event| event.detail.contains("MANDATE.REPLAY_DETECTED"))
+        .expect("replay rejection audit evidence");
+    assert_eq!(replay.decision, "denied");
+    assert!(replay.detail.contains("provider dispatch suppressed"));
+    assert_eq!(
+        ports
+            .attempt_store
+            .by_mandate("mandate-1")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -829,7 +896,10 @@ async fn attempt_digest_is_deterministic() {
     let digest3 = compute_attempt_digest("att-2", "mandate-1", "intent-1");
 
     assert_eq!(digest1, digest2, "same inputs produce same digest");
-    assert_ne!(digest1, digest3, "different attempt ID produces different digest");
+    assert_ne!(
+        digest1, digest3,
+        "different attempt ID produces different digest"
+    );
 }
 
 #[tokio::test]
@@ -839,7 +909,10 @@ async fn attempt_digest_changes_with_mandate_id() {
     let digest1 = compute_attempt_digest("att-1", "mandate-1", "intent-1");
     let digest2 = compute_attempt_digest("att-1", "mandate-2", "intent-1");
 
-    assert_ne!(digest1, digest2, "different mandate ID produces different digest");
+    assert_ne!(
+        digest1, digest2,
+        "different mandate ID produces different digest"
+    );
 }
 
 #[tokio::test]
@@ -849,7 +922,10 @@ async fn attempt_digest_changes_with_intent_id() {
     let digest1 = compute_attempt_digest("att-1", "mandate-1", "intent-1");
     let digest2 = compute_attempt_digest("att-1", "mandate-1", "intent-2");
 
-    assert_ne!(digest1, digest2, "different intent ID produces different digest");
+    assert_ne!(
+        digest1, digest2,
+        "different intent ID produces different digest"
+    );
 }
 
 #[tokio::test]
@@ -893,14 +969,57 @@ async fn complete_dispatch_records_deployment_id_separately() {
     .unwrap();
 
     // Verify the attempt has the deployment ID.
-    let attempt = ports
-        .attempt_store
-        .get(&attempt_id)
-        .await
-        .unwrap()
-        .unwrap();
+    let attempt = ports.attempt_store.get(&attempt_id).await.unwrap().unwrap();
     assert_eq!(attempt.github_deployment_id, Some(123));
     assert_eq!(attempt.state, ExecutionAttemptState::Accepted);
+}
+
+#[tokio::test]
+async fn accepted_dispatch_without_deployment_id_fails_closed() {
+    let clock = StepClock::at(1_000);
+    let ports = TestPorts::new(clock.clone());
+    let uc = use_case(&ports);
+
+    setup_approved_request(&ports, "req-1", "mandate-1").await;
+    let reserved = uc
+        .reserve(
+            "req-1",
+            "mandate-1",
+            "intent-abc123",
+            "worker-1",
+            "token-1",
+            "corr-1",
+            1,
+        )
+        .await
+        .unwrap();
+    let attempt_id = match reserved {
+        DispatchOutcome::Dispatched(dispatched) => dispatched.attempt_id_hex,
+        other => panic!("expected Dispatched, got {other:?}"),
+    };
+
+    let error = uc
+        .complete_dispatch(
+            &attempt_id,
+            "mandate-1",
+            "intent-abc123",
+            true,
+            None,
+            "worker-1",
+            2,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        crate::dispatch::DispatchError::InvalidProviderResponse(_)
+    ));
+    let attempt = ports.attempt_store.get(&attempt_id).await.unwrap().unwrap();
+    assert_eq!(attempt.state, ExecutionAttemptState::OutcomeAmbiguous);
+    assert_eq!(attempt.github_deployment_id, None);
+    let mandate = ports.mandate_store.get("mandate-1").await.unwrap().unwrap();
+    assert_eq!(mandate.state, "quarantined");
 }
 
 #[tokio::test]

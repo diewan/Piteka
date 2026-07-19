@@ -321,7 +321,10 @@ pub trait GitHubSecretResolver: Send + Sync {
     ///
     /// Returns an error when the reference is unknown, the backing store is
     /// unavailable, or the resolved bytes are empty.
-    async fn resolve_app_secret(&self, reference: &GitHubSecretReference) -> Result<Vec<u8>, GitHubSecretError>;
+    async fn resolve_app_secret(
+        &self,
+        reference: &GitHubSecretReference,
+    ) -> Result<Vec<u8>, GitHubSecretError>;
 
     /// Resolves a webhook signing secret reference to its raw bytes.
     ///
@@ -329,7 +332,10 @@ pub trait GitHubSecretResolver: Send + Sync {
     ///
     /// Returns an error when the reference is unknown, the backing store is
     /// unavailable, or the resolved bytes are empty.
-    async fn resolve_webhook_secret(&self, secret: &GitHubWebhookSecret) -> Result<Vec<u8>, GitHubSecretError>;
+    async fn resolve_webhook_secret(
+        &self,
+        secret: &GitHubWebhookSecret,
+    ) -> Result<Vec<u8>, GitHubSecretError>;
 }
 
 /// A failure resolving a GitHub secret.
@@ -352,9 +358,7 @@ impl fmt::Display for GitHubSecretError {
             Self::StoreUnavailable(source) => {
                 write!(f, "secret store unavailable: {source}")
             }
-            Self::EmptySecret => {
-                f.write_str("resolved secret was empty")
-            }
+            Self::EmptySecret => f.write_str("resolved secret was empty"),
         }
     }
 }
@@ -498,6 +502,7 @@ pub trait GitHubAppPort: Send + Sync {
     ///
     /// Returns an error when the secret cannot be resolved, the GitHub API
     /// rejects the request, or required fields are empty.
+    #[allow(clippy::too_many_arguments)]
     async fn create_deployment(
         &self,
         installation_id: &GitHubInstallationId,

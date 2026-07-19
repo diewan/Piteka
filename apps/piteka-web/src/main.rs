@@ -7,7 +7,6 @@
 
 use axum::{Router, routing::get};
 use piteka_api::TestPorts;
-use piteka_application::ActionRequestUseCase;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -29,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(api_router)
         .route("/health", get(|| async { "ready" }));
 
-    let address = ([127, 0, 0, 1], 3000).into();
+    let address = std::net::SocketAddr::from(([127, 0, 0, 1], 3000));
     eprintln!("Piteka web approval UI listening on http://{}", address);
     axum::serve(tokio::net::TcpListener::bind(address).await?, app).await?;
     Ok(())

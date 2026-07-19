@@ -8,7 +8,7 @@
 //!
 //! Authority: `DIEWAN_DESIGN_SYSTEM_AND_LANGUAGE.md`, `DIEWAN_UX_FLOW_SPEC.md`
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// Data for the work queue page (S1).
 #[derive(Serialize)]

@@ -1,14 +1,19 @@
 //! Axum route definitions for the first-slice API.
 
-use axum::{Router, extract::State, routing::{get, post}, Json, response::{IntoResponse, Response}};
+use axum::{
+    Json, Router,
+    extract::State,
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
 use piteka_application::ActionRequestUseCase;
 
 use crate::TestPorts;
-use crate::models::{
-    ActionRequestResponse, ActionRequestSummary,
-    ApproveRequest, CreateActionRequestRequest, RejectRequest, RevokeRequest,
-};
 use crate::error::ApiError;
+use crate::models::{
+    ActionRequestResponse, ActionRequestSummary, ApproveRequest, CreateActionRequestRequest,
+    RejectRequest, RevokeRequest,
+};
 
 /// Builds the action-requests router mounted at `/api/v1/action-requests`.
 pub fn action_requests(use_case: ActionRequestUseCase<TestPorts>) -> Router {
@@ -39,11 +44,21 @@ pub fn build_full_router(use_case: ActionRequestUseCase<TestPorts>) -> Router {
         )
 }
 
+/// Builds the full API router including the authenticated GitHub webhook.
+pub fn build_full_router_with_webhook(ports: TestPorts) -> Router {
+    build_full_router(ports.use_case()).merge(
+        Router::new()
+            .route(
+                "/api/v1/webhooks/github",
+                post(crate::webhook::handle_webhook),
+            )
+            .with_state(ports.webhook_state()),
+    )
+}
+
 // ── Handlers ────────────────────────────────────────────────────────────────
 
-async fn list_action_requests(
-    State(use_case): State<ActionRequestUseCase<TestPorts>>,
-) -> Response {
+async fn list_action_requests(State(use_case): State<ActionRequestUseCase<TestPorts>>) -> Response {
     let requests = match use_case.list_requests().await {
         Ok(r) => r,
         Err(err) => return ApiError::from(err).into_response(),
@@ -98,11 +113,8 @@ async fn propose_action_request(
     Json(body): Json<CreateActionRequestRequest>,
 ) -> Response {
     if body.requested_by.is_empty() {
-        return ApiError::bad_request(
-            "EMPTY_REQUESTED_BY",
-            "The `requested_by` field is required",
-        )
-        .into_response();
+        return ApiError::bad_request("EMPTY_REQUESTED_BY", "The `requested_by` field is required")
+            .into_response();
     }
 
     let user_id = piteka_domain::UserId::new(&body.requested_by)
@@ -134,17 +146,17 @@ async fn approve_action_request(
     Json(body): Json<ApproveRequest>,
 ) -> Response {
     if body.approver_id.is_empty() {
-        return ApiError::bad_request(
-            "EMPTY_APPROVER_ID",
-            "The `approver_id` field is required",
-        )
-        .into_response();
+        return ApiError::bad_request("EMPTY_APPROVER_ID", "The `approver_id` field is required")
+            .into_response();
     }
 
     let user_id = piteka_domain::UserId::new(&body.approver_id)
         .unwrap_or_else(|_| piteka_domain::UserId::new("unknown").unwrap());
 
-    let approved = match use_case.approve(&request_id, user_id, body.intent_id, body.version).await {
+    let approved = match use_case
+        .approve(&request_id, user_id, body.intent_id, body.version)
+        .await
+    {
         Ok(a) => a,
         Err(err) => return ApiError::from(err).into_response(),
     };
@@ -172,17 +184,17 @@ async fn reject_action_request(
     Json(body): Json<RejectRequest>,
 ) -> Response {
     if body.approver_id.is_empty() {
-        return ApiError::bad_request(
-            "EMPTY_APPROVER_ID",
-            "The `approver_id` field is required",
-        )
-        .into_response();
+        return ApiError::bad_request("EMPTY_APPROVER_ID", "The `approver_id` field is required")
+            .into_response();
     }
 
     let user_id = piteka_domain::UserId::new(&body.approver_id)
         .unwrap_or_else(|_| piteka_domain::UserId::new("unknown").unwrap());
 
-    let rejected = match use_case.reject(&request_id, user_id, body.intent_id, body.version).await {
+    let rejected = match use_case
+        .reject(&request_id, user_id, body.intent_id, body.version)
+        .await
+    {
         Ok(r) => r,
         Err(err) => return ApiError::from(err).into_response(),
     };
@@ -210,11 +222,8 @@ async fn revoke_action_request(
     Json(body): Json<RevokeRequest>,
 ) -> Response {
     if body.approver_id.is_empty() {
-        return ApiError::bad_request(
-            "EMPTY_APPROVER_ID",
-            "The `approver_id` field is required",
-        )
-        .into_response();
+        return ApiError::bad_request("EMPTY_APPROVER_ID", "The `approver_id` field is required")
+            .into_response();
     }
 
     let user_id = piteka_domain::UserId::new(&body.approver_id)

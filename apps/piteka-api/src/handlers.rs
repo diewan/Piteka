@@ -2,26 +2,21 @@
 
 use axum::{
     Json,
-    extract::{Path, State, FromRequestParts},
+    extract::{FromRequestParts, Path, State},
     http::{StatusCode, request::Parts},
     response::{IntoResponse, Response},
 };
-use piteka_application::bundle_export::assemble_bundle;
-use piteka_application::receipt_production::{
-    parse_deployment_status, produce_receipt_from_webhook,
-};
 use piteka_application::ActionRequestUseCase;
+use piteka_application::bundle_export::assemble_bundle;
 use piteka_domain::UserId;
-use piteka_storage::ports::{
-    EvidenceNodeStore, EvidenceObjectStore, ProtocolObjectStore, ReceiptProjectionStore,
-};
+use piteka_storage::ports::ReceiptProjectionStore;
 
+use crate::TestPorts;
 use crate::error::{ApiError, ErrorResponse};
 use crate::models::{
-    ActionRequestResponse, ActionRequestSummary,
-    ApproveRequest, CreateActionRequestRequest, RejectRequest, RevokeRequest,
+    ActionRequestResponse, ActionRequestSummary, ApproveRequest, CreateActionRequestRequest,
+    RejectRequest, RevokeRequest,
 };
-use crate::TestPorts;
 
 /// Optional idempotency key extracted from the request header.
 #[derive(Debug, Default)]
@@ -117,11 +112,8 @@ pub async fn propose_action_request(
 ) -> Response {
     // Validate request body
     if body.requested_by.is_empty() {
-        return ApiError::bad_request(
-            "EMPTY_REQUESTED_BY",
-            "The `requested_by` field is required",
-        )
-        .into_response();
+        return ApiError::bad_request("EMPTY_REQUESTED_BY", "The `requested_by` field is required")
+            .into_response();
     }
 
     let user_id = match UserId::new(&body.requested_by) {
@@ -161,11 +153,8 @@ pub async fn approve_action_request(
     Json(body): Json<ApproveRequest>,
 ) -> Response {
     if body.approver_id.is_empty() {
-        return ApiError::bad_request(
-            "EMPTY_APPROVER_ID",
-            "The `approver_id` field is required",
-        )
-        .into_response();
+        return ApiError::bad_request("EMPTY_APPROVER_ID", "The `approver_id` field is required")
+            .into_response();
     }
 
     let user_id = match UserId::new(&body.approver_id) {
@@ -173,7 +162,10 @@ pub async fn approve_action_request(
         Err(_) => UserId::new("unknown").unwrap(),
     };
 
-    let approved = match use_case.approve(&request_id, user_id, body.intent_id, body.version).await {
+    let approved = match use_case
+        .approve(&request_id, user_id, body.intent_id, body.version)
+        .await
+    {
         Ok(a) => a,
         Err(err) => return ApiError::from(err).into_response(),
     };
@@ -207,11 +199,8 @@ pub async fn reject_action_request(
     Json(body): Json<RejectRequest>,
 ) -> Response {
     if body.approver_id.is_empty() {
-        return ApiError::bad_request(
-            "EMPTY_APPROVER_ID",
-            "The `approver_id` field is required",
-        )
-        .into_response();
+        return ApiError::bad_request("EMPTY_APPROVER_ID", "The `approver_id` field is required")
+            .into_response();
     }
 
     let user_id = match UserId::new(&body.approver_id) {
@@ -219,7 +208,10 @@ pub async fn reject_action_request(
         Err(_) => UserId::new("unknown").unwrap(),
     };
 
-    let rejected = match use_case.reject(&request_id, user_id, body.intent_id, body.version).await {
+    let rejected = match use_case
+        .reject(&request_id, user_id, body.intent_id, body.version)
+        .await
+    {
         Ok(r) => r,
         Err(err) => return ApiError::from(err).into_response(),
     };
@@ -253,11 +245,8 @@ pub async fn revoke_action_request(
     Json(body): Json<RevokeRequest>,
 ) -> Response {
     if body.approver_id.is_empty() {
-        return ApiError::bad_request(
-            "EMPTY_APPROVER_ID",
-            "The `approver_id` field is required",
-        )
-        .into_response();
+        return ApiError::bad_request("EMPTY_APPROVER_ID", "The `approver_id` field is required")
+            .into_response();
     }
 
     let user_id = match UserId::new(&body.approver_id) {
@@ -318,7 +307,7 @@ pub async fn get_receipt(
             Json(response).into_response()
         }
         Ok(None) => ApiError::not_found("receipt", &receipt_id).into_response(),
-        Err(err) => ApiError::internal(&format!("storage error: {err}")).into_response(),
+        Err(err) => ApiError::internal(format!("storage error: {err}")).into_response(),
     }
 }
 
@@ -352,7 +341,7 @@ pub async fn export_bundle(
             });
             Json(response).into_response()
         }
-        Err(err) => ApiError::internal(&format!("bundle export failed: {err}")).into_response(),
+        Err(err) => ApiError::internal(format!("bundle export failed: {err}")).into_response(),
     }
 }
 
@@ -366,17 +355,11 @@ pub async fn get_receipt_canonical(
     Path(receipt_id): Path<String>,
 ) -> Response {
     match ports.receipt_store.get(&receipt_id).await {
-        Ok(Some(receipt)) => {
-            match receipt.canonical_bytes {
-                Some(bytes) => {
-                    (StatusCode::OK, bytes).into_response()
-                }
-                None => {
-                    ApiError::not_found("canonical receipt bytes", &receipt_id).into_response()
-                }
-            }
-        }
+        Ok(Some(receipt)) => match receipt.canonical_bytes {
+            Some(bytes) => (StatusCode::OK, bytes).into_response(),
+            None => ApiError::not_found("canonical receipt bytes", &receipt_id).into_response(),
+        },
         Ok(None) => ApiError::not_found("receipt", &receipt_id).into_response(),
-        Err(err) => ApiError::internal(&format!("storage error: {err}")).into_response(),
+        Err(err) => ApiError::internal(format!("storage error: {err}")).into_response(),
     }
 }

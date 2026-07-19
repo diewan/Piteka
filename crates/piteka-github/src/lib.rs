@@ -54,14 +54,51 @@ pub mod intent;
 use async_trait::async_trait;
 use base64::Engine;
 use hmac::Mac;
-use pkcs8::DecodePrivateKey;
 use piteka_domain::OrganizationId;
 use piteka_ports::github::{
-    DeploymentCreated, GitHubAppError, GitHubAppPort, GitHubEnvironmentId, GitHubEnvironmentName,
-    GitHubInstallationContext, GitHubInstallationId, GitHubRepositoryId, GitHubRepositoryName,
-    GitHubSecretError, GitHubSecretReference, GitHubSecretResolver, GitHubWebhookPayload,
-    GitHubWebhookSecret, WebhookSignatureResult,
+    DeploymentCreated, GitHubAppError, GitHubAppPort, GitHubEnvironmentName,
+    GitHubInstallationContext, GitHubInstallationId, GitHubRepositoryId, GitHubSecretError,
+    GitHubSecretReference, GitHubSecretResolver, GitHubWebhookPayload, GitHubWebhookSecret,
+    WebhookSignatureResult,
 };
+use pkcs8::DecodePrivateKey;
+use serde::Serialize;
+
+/// GitHub Deployments API request body for the controlled deployment profile.
+///
+/// The correlation values live in GitHub's opaque `payload` object so they are
+/// retained on the provider deployment and echoed by deployment webhooks.
+#[derive(Debug, Serialize)]
+struct CreateDeploymentRequest<'a> {
+    #[serde(rename = "ref")]
+    commit_sha: &'a str,
+    auto_merge: bool,
+    environment: &'a str,
+    payload: DeploymentCorrelationPayload<'a>,
+}
+
+#[derive(Debug, Serialize)]
+struct DeploymentCorrelationPayload<'a> {
+    payload_commitment: &'a str,
+    attempt_digest: String,
+}
+
+fn deployment_request_body<'a>(
+    commit_sha: &'a str,
+    environment: &'a GitHubEnvironmentName,
+    payload_commitment: &'a str,
+    attempt_digest: [u8; 32],
+) -> CreateDeploymentRequest<'a> {
+    CreateDeploymentRequest {
+        commit_sha,
+        auto_merge: false,
+        environment: environment.as_str(),
+        payload: DeploymentCorrelationPayload {
+            payload_commitment,
+            attempt_digest: hex::encode(attempt_digest),
+        },
+    }
+}
 
 // ---------------------------------------------------------------------------
 // JWT token generation
@@ -72,6 +109,7 @@ use piteka_ports::github::{
 /// GitHub requires a JWT for App-level authentication (creating installation
 /// access tokens). This struct holds the token string and its expiration.
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 struct JwtToken {
     token: String,
     expires_at: u64,
@@ -80,6 +118,7 @@ struct JwtToken {
 impl JwtToken {
     /// Whether this token is still valid.
     #[must_use]
+    #[allow(dead_code)]
     fn is_valid(&self, now: u64) -> bool {
         now < self.expires_at
     }
@@ -99,6 +138,7 @@ impl JwtToken {
 /// # Errors
 ///
 /// Returns an error when the private key is malformed or the signing fails.
+#[allow(dead_code)]
 fn generate_jwt(
     app_id: u64,
     private_key: &[u8],
@@ -110,13 +150,6 @@ fn generate_jwt(
         .encode(r#"{"alg":"RS256","typ":"JWT"}"#.as_bytes());
 
     // Payload: {"iat": <issued_at>, "exp": <issued_at + 600>, "iss": <app_id>}
-    let payload_content = format!(
-        r#"{{"iat":{issued_at},"exp":{},{},"iss":{}}}"#,
-        issued_at + 600, // 10 minutes
-        "",              // empty issuer placeholder — GitHub accepts app_id as string in iss
-        app_id
-    );
-
     // Actually build proper payload
     let payload = format!(
         r#"{{"iat":{},"exp":{},"iss":"{}"}}"#,
@@ -138,10 +171,7 @@ fn generate_jwt(
     })?;
 
     let signature = private_key
-        .sign(
-            rsa::Pss::new::<sha2::Sha256>(),
-            signing_input.as_bytes(),
-        )
+        .sign(rsa::Pss::new::<sha2::Sha256>(), signing_input.as_bytes())
         .map_err(|e| {
             GitHubAppError::SecretResolution(GitHubSecretError::StoreUnavailable(e.to_string()))
         })?;
@@ -227,8 +257,8 @@ pub fn verify_webhook_signature_internal(
     };
 
     // Compute HMAC-SHA256 of the payload body with the secret
-    let mut mac =
-        hmac::Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes())
+        .expect("HMAC can take key of any size");
     mac.update(payload);
     let computed = mac.finalize().into_bytes();
 
@@ -243,7 +273,6 @@ pub fn verify_webhook_signature_internal(
     if expected_bytes.len() != 32 {
         return WebhookSignatureResult::MissingOrMalformed;
     }
-
     let mut diff = 0u8;
     for (a, b) in computed.iter().zip(expected_bytes.iter()) {
         diff |= a ^ b;
@@ -362,7 +391,11 @@ where
             .map_err(GitHubAppError::SecretResolution)?;
 
         // Verify using the internal function
-        let result = verify_webhook_signature_internal(&payload.body, &payload.signature, std::str::from_utf8(&secret_bytes).unwrap_or(""));
+        let result = verify_webhook_signature_internal(
+            &payload.body,
+            &payload.signature,
+            std::str::from_utf8(&secret_bytes).unwrap_or(""),
+        );
 
         // Drop the secret bytes immediately after use
         drop(secret_bytes);
@@ -384,7 +417,16 @@ where
         if commit_sha.is_empty() || commit_sha.len() != 40 {
             return Err(GitHubAppError::EmptyField("commit_sha"));
         }
-        if payload_commitment.is_empty() || payload_commitment.len() != 64 {
+        if !commit_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(GitHubAppError::ApiError(
+                "commit_sha must be a 40-character hexadecimal object ID".to_string(),
+            ));
+        }
+        if payload_commitment.len() != 64
+            || !payload_commitment
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
             return Err(GitHubAppError::EmptyField("payload_commitment"));
         }
         if auto_merge {
@@ -417,8 +459,12 @@ where
 
         let _ = token;
         let _ = repository_id;
-        let _ = environment;
-        let _ = payload_commitment;
+        // Construct the exact provider body at the adapter boundary. The
+        // infrastructure HTTP transport sends these bytes unchanged.
+        let request =
+            deployment_request_body(commit_sha, environment, payload_commitment, attempt_digest);
+        let _request_body = serde_json::to_vec(&request)
+            .map_err(|error| GitHubAppError::ApiError(error.to_string()))?;
 
         // In production, this would:
         // 1. POST to `/repos/{owner}/{repo}/deployments` with the deployment payload
@@ -532,7 +578,9 @@ impl GitHubSecretResolver for InMemorySecretResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use piteka_ports::github::{GitHubAppPort, GitHubWebhookPayload};
+    use piteka_ports::github::{
+        GitHubAppPort, GitHubEnvironmentId, GitHubRepositoryName, GitHubWebhookPayload,
+    };
 
     fn make_test_adapter() -> GitHubAppAdapter<InMemorySecretResolver> {
         let mut resolver = InMemorySecretResolver::new();
@@ -671,7 +719,7 @@ mod tests {
                 "abcdef0123456789abcdef0123456789abcdef01",
                 &GitHubEnvironmentName::new("production").unwrap(),
                 true, // auto_merge = true should be rejected
-                "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01",
+                "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
                 [0u8; 32],
             )
             .await;
@@ -696,7 +744,7 @@ mod tests {
                 "abc123", // too short
                 &GitHubEnvironmentName::new("production").unwrap(),
                 false,
-                "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01",
+                "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
                 [0u8; 32],
             )
             .await;
@@ -721,7 +769,7 @@ mod tests {
                 "abcdef0123456789abcdef0123456789abcdef01",
                 &GitHubEnvironmentName::new("production").unwrap(),
                 false,
-                "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01",
+                "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
                 [0u8; 32],
             )
             .await;
@@ -730,6 +778,46 @@ mod tests {
         let deployment = result.unwrap();
         assert_eq!(deployment.deployment_id, 12345 * 1000 + 1);
         assert!(deployment.url.contains("demo-repo"));
+    }
+
+    #[test]
+    fn deployment_payload_binds_exact_sha_and_attempt_digest() {
+        let digest = [0xabu8; 32];
+        let environment = GitHubEnvironmentName::new("production").unwrap();
+        let request = deployment_request_body(
+            "abcdef0123456789abcdef0123456789abcdef01",
+            &environment,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            digest,
+        );
+        let value = serde_json::to_value(request).unwrap();
+
+        assert_eq!(value["ref"], "abcdef0123456789abcdef0123456789abcdef01");
+        assert_eq!(value["auto_merge"], false);
+        assert_eq!(value["environment"], "production");
+        assert_eq!(value["payload"]["attempt_digest"], "ab".repeat(32));
+        assert_eq!(
+            value["payload"]["payload_commitment"],
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_deployment_rejects_non_hex_commit_sha() {
+        let adapter = make_test_adapter();
+        let result = adapter
+            .create_deployment(
+                &GitHubInstallationId::new("123").unwrap(),
+                &GitHubRepositoryId::new("456").unwrap(),
+                "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+                &GitHubEnvironmentName::new("production").unwrap(),
+                false,
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                [0u8; 32],
+            )
+            .await;
+
+        assert!(matches!(result, Err(GitHubAppError::ApiError(_))));
     }
 
     #[tokio::test]

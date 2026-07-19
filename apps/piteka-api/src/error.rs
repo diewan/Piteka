@@ -62,7 +62,10 @@ pub enum ApiError {
     /// The action request is in a state that does not allow the requested operation.
     InvalidState { current: String, attempted: String },
     /// Optimistic concurrency conflict (CAS failed).
-    Conflict { expected_version: i64, current_version: i64 },
+    Conflict {
+        expected_version: i64,
+        current_version: i64,
+    },
     /// The caller lacks the required capability.
     Forbidden { capability: String },
     /// A server-side failure (storage, etc.).
@@ -135,12 +138,11 @@ impl From<piteka_storage::StorageError> for ApiError {
             piteka_storage::StorageError::EvidenceDigestMismatch { .. } => {
                 Self::Internal("evidence digest mismatch".to_string())
             }
-            piteka_storage::StorageError::EmptyField(field) => {
-                Self::bad_request("EMPTY_FIELD", format!("Required field `{}` is empty", field))
-            }
-            piteka_storage::StorageError::Backend(msg) => {
-                Self::Internal(msg)
-            }
+            piteka_storage::StorageError::EmptyField(field) => Self::bad_request(
+                "EMPTY_FIELD",
+                format!("Required field `{}` is empty", field),
+            ),
+            piteka_storage::StorageError::Backend(msg) => Self::Internal(msg),
         }
     }
 }
@@ -148,18 +150,17 @@ impl From<piteka_storage::StorageError> for ApiError {
 impl From<piteka_application::ActionRequestUseCaseError> for ApiError {
     fn from(err: piteka_application::ActionRequestUseCaseError) -> Self {
         match err {
-            piteka_application::ActionRequestUseCaseError::Storage(storage) => {
-                Self::from(storage)
-            }
+            piteka_application::ActionRequestUseCaseError::Storage(storage) => Self::from(storage),
             piteka_application::ActionRequestUseCaseError::NotFound(id) => {
                 Self::not_found("action request", id)
             }
-            piteka_application::ActionRequestUseCaseError::InvalidTransition { current, attempted } => {
-                Self::InvalidState {
-                    current: format!("{:?}", current),
-                    attempted: attempted.to_string(),
-                }
-            }
+            piteka_application::ActionRequestUseCaseError::InvalidTransition {
+                current,
+                attempted,
+            } => Self::InvalidState {
+                current: format!("{:?}", current),
+                attempted: attempted.to_string(),
+            },
             piteka_application::ActionRequestUseCaseError::Conflict {
                 expected_version,
                 current_version,

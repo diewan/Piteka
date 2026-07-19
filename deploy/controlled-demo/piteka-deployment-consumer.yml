@@ -1,0 +1,122 @@
+# Install this file unchanged as .github/workflows/piteka-deployment-consumer.yml
+# in the dedicated demo repository. Its SHA-256 digest is captured as evidence.
+name: Piteka Deployment Consumer
+
+on:
+  deployment:
+
+permissions:
+  contents: read
+  deployments: write
+  id-token: write
+
+concurrency:
+  group: piteka-deployment-${{ github.event.deployment.id }}
+  cancel-in-progress: false
+
+jobs:
+  consume:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Deliberately no `environment:`: Piteka is the single approval authority.
+    steps:
+      - name: Mark original deployment in progress
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOYMENT_ID: ${{ github.event.deployment.id }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${REPOSITORY}/deployments/${DEPLOYMENT_ID}/statuses" \
+            --data '{"state":"in_progress","description":"Piteka consumer validating exact deployment"}'
+
+      - name: Validate Piteka correlation and immutable controls
+        id: validate
+        env:
+          EXPECTED_ENVIRONMENT: piteka-demo-production
+        run: |
+          set -euo pipefail
+          # Validate before checkout so a target commit cannot replace the validator.
+          jq -e --arg environment "${EXPECTED_ENVIRONMENT}" '
+            .deployment.id | type == "number" and . > 0
+          ' "${GITHUB_EVENT_PATH}" >/dev/null
+          jq -e --arg environment "${EXPECTED_ENVIRONMENT}" '
+            (.repository.id | type == "number" and . > 0) and
+            (.deployment.sha | type == "string" and test("^[0-9a-f]{40}$")) and
+            (.deployment.ref == .deployment.sha) and
+            (.deployment.task == "deploy") and
+            (.deployment.environment == $environment) and
+            (.deployment.payload | type == "object") and
+            (.deployment.payload | keys == ["piteka_attempt_digest", "schema_version"]) and
+            (.deployment.payload.schema_version == 1) and
+            (.deployment.payload.piteka_attempt_digest | type == "string" and test("^[0-9a-f]{64}$"))
+          ' "${GITHUB_EVENT_PATH}" >/dev/null
+          jq -r '
+            "deployment_id=\(.deployment.id)\n" +
+            "sha=\(.deployment.sha)\n" +
+            "attempt_digest=\(.deployment.payload.piteka_attempt_digest)\n" +
+            "repository_id=\(.repository.id)"
+          ' "${GITHUB_EVENT_PATH}" >> "${GITHUB_OUTPUT}"
+
+      - name: Check out exact deployment commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.validate.outputs.sha }}
+          persist-credentials: false
+
+      - name: Perform controlled action
+        env:
+          DEPLOYMENT_ID: ${{ steps.validate.outputs.deployment_id }}
+          DEPLOYED_SHA: ${{ steps.validate.outputs.sha }}
+          ATTEMPT_DIGEST: ${{ steps.validate.outputs.attempt_digest }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${DEPLOYED_SHA}"
+          install -d build/piteka-demo
+          jq -n --sort-keys \
+            --arg deployment_id "${DEPLOYMENT_ID}" \
+            --arg sha "${DEPLOYED_SHA}" \
+            --arg attempt_digest "${ATTEMPT_DIGEST}" \
+            --arg workflow_ref "${WORKFLOW_REF}" \
+            --arg workflow_sha "${WORKFLOW_SHA}" \
+            --arg run_id "${RUN_ID}" \
+            --arg run_attempt "${RUN_ATTEMPT}" \
+            '{deployment_id:$deployment_id,sha:$sha,attempt_digest:$attempt_digest,workflow_ref:$workflow_ref,workflow_sha:$workflow_sha,run_id:$run_id,run_attempt:$run_attempt}' \
+            > build/piteka-demo/deployment.json
+          sha256sum build/piteka-demo/deployment.json > build/piteka-demo/deployment.json.sha256
+
+      - name: Post terminal status against original deployment
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOYMENT_ID: ${{ github.event.deployment.id }}
+          REPOSITORY: ${{ github.repository }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          case "${JOB_STATUS}" in
+            success) terminal=success ;;
+            failure) terminal=failure ;;
+            cancelled) terminal=error ;;
+            *) terminal=error ;;
+          esac
+          jq -n --arg state "${terminal}" --arg target_url "${RUN_URL}" \
+            '{state:$state,target_url:$target_url,description:"Piteka deployment consumer terminal status"}' \
+            > "${RUNNER_TEMP}/terminal-status.json"
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${REPOSITORY}/deployments/${DEPLOYMENT_ID}/statuses" \
+            --data-binary "@${RUNNER_TEMP}/terminal-status.json"

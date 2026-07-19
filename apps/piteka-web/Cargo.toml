@@ -11,6 +11,7 @@ askama = { version = "0.12", features = ["serde"] }
 axum.workspace = true
 piteka-application.workspace = true
 piteka-domain.workspace = true
+piteka-storage.workspace = true
 piteka-api = { path = "../../apps/piteka-api" }
 piteka-ui.workspace = true
 serde = { version = "1", features = ["derive"] }

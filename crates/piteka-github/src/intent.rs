@@ -44,13 +44,10 @@
 //! cross-tenant, or unauthenticated input. It never invents success or
 //! accepts a weakened gate configuration.
 
-use std::sync::Arc;
-
 use piteka_parwana::ParwanaContract;
 use piteka_parwana::protocol::{
-    ACCOUNTABILITY_OBJECT_VERSION, ACCOUNTABILITY_PROTOCOL_VERSION, ActionIntent,
-    ActionIntentWire, GateProfileId, GitHubDeploymentIntentV1,
-    GitHubDeploymentIntentV1Wire, IntentError, ObjectVersion, ProtocolVersion, RequiredContexts,
+    ActionIntent, ActionIntentWire, GateProfileId, GitHubDeploymentIntentV1,
+    GitHubDeploymentIntentV1Wire, IntentError, RequiredContexts,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -63,10 +60,6 @@ const MAX_REQUIRED_CONTEXTS: usize = 32;
 const MAX_IDENTITY_BYTES: usize = 4_096;
 /// Fixed task used by the first production deployment profile.
 const GITHUB_DEPLOYMENT_TASK_V1: &str = "deploy";
-/// Media type of the canonical parameter commitment.
-const PARAMETERS_MEDIA_TYPE_V1: &str = "application/vnd.diewan.github-deployment-v1+csv-binary";
-/// Action type string for the first production deployment profile.
-const ACTION_TYPE_GITHUB_DEPLOYMENT: &str = "github.deployment";
 
 /// A validation failure for GitHub intent normalization.
 ///
@@ -330,7 +323,9 @@ impl GitHubIntentNormalizer {
         // Validate the profile fields.
         profile.validate().map_err(|e| match e {
             IntentError::EmptyField(f) => NormalizeError::EmptyField(f.to_string()),
-            IntentError::DisplayFieldTooLong(f) => NormalizeError::DisplayFieldTooLong(f.to_string()),
+            IntentError::DisplayFieldTooLong(f) => {
+                NormalizeError::DisplayFieldTooLong(f.to_string())
+            }
             IntentError::InvalidCommitSha => NormalizeError::InvalidCommitSha,
             IntentError::InvalidRequiredContexts => NormalizeError::InvalidRequiredContexts,
             IntentError::GatePolicyMismatch => NormalizeError::GatePolicyMismatch,
@@ -552,9 +547,6 @@ pub fn build_payload_commitment(
         IntentError::InvalidStableId => NormalizeError::InvalidStableId,
         _ => NormalizeError::ParwanaError(format!("profile validation failed: {e:?}")),
     })?;
-    let canonical = profile
-        .canonical_bytes()
-        .map_err(|_| NormalizeError::ParwanaError("profile canonical bytes failed".to_string()))?;
     // The parameter commitment is computed by DomainSeparatedHash<GateProfileDomain>
     // over b"github-deployment-parameters-v1" || canonical_bytes.
     // We delegate to the SDK's ActionIntent construction which does this internally.
@@ -602,7 +594,6 @@ pub mod wire {
 #[cfg(test)]
 mod intent_tests {
     use super::*;
-    use piteka_parwana::protocol::GateProfileId;
 
     const TEST_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 

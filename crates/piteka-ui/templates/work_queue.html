@@ -6,11 +6,6 @@
   <p>Actions that need your attention, filtered by your role.</p>
 </div>
 
-{% if requests.is_empty() %}
-  <div class="pk-empty-state">
-    <p>Nothing awaiting your review.</p>
-  </div>
-{% else %}
   <table class="pk-table" aria-label="Action requests">
     <thead>
       <tr>
@@ -21,6 +16,9 @@
       </tr>
     </thead>
     <tbody>
+      {% if requests.is_empty() %}
+      <tr><td colspan="4" class="pk-empty-state">Nothing awaiting your review.</td></tr>
+      {% endif %}
       {% for req in requests %}
       <tr>
         <td>
@@ -42,6 +40,5 @@
       {% endfor %}
     </tbody>
   </table>
-{% endif %}
 
 {% endblock %}

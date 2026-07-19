@@ -138,10 +138,20 @@ where
 
     // 3. Store evidence blobs in the content-addressed store.
     let mut all_evidence_ids = Vec::new();
+    let mut evidence_descriptors = Vec::new();
 
-    for node in dispatch_nodes.iter().chain(target_nodes.iter()).chain(gap_nodes.iter()) {
-        let blob_digest = store_evidence_blob(evidence_blob_store, node).await?;
+    for node in dispatch_nodes
+        .iter()
+        .chain(target_nodes.iter())
+        .chain(gap_nodes.iter())
+    {
+        let (blob_digest, size_bytes) = store_evidence_blob(evidence_blob_store, node).await?;
         all_evidence_ids.push(format!("{}:{}", node.node_id_hex, blob_digest.to_hex()));
+        evidence_descriptors.push(piteka_storage::model::EvidenceDescriptor {
+            digest: blob_digest,
+            media_type: "application/vnd.diewan.evidence-node+json".to_string(),
+            size_bytes,
+        });
     }
 
     // 4. Assemble the bundle manifest as JSON.
@@ -156,21 +166,17 @@ where
     let bundle_id_hex = format!("bundle-{}", bundle_digest.to_hex());
 
     // Store in protocol objects as the canonical bundle.
-    protocol_store.put(ProtocolObjectRecord {
-        kind: "dispute_bundle".to_string(),
-        object_id_hex: bundle_id_hex.clone(),
-        bytes: bundle_bytes.clone(),
-    }).await?;
+    protocol_store
+        .put(ProtocolObjectRecord {
+            kind: "dispute_bundle".to_string(),
+            object_id_hex: bundle_id_hex.clone(),
+            bytes: bundle_bytes.clone(),
+        })
+        .await?;
 
     // 6. Store evidence descriptors.
-    for node in dispatch_nodes.iter().chain(target_nodes.iter()).chain(gap_nodes.iter()) {
-        let _ = evidence_blob_store.put_descriptor(
-            piteka_storage::model::EvidenceDescriptor {
-                digest: node.content_digest,
-                media_type: node.media_type.clone(),
-                size_bytes: node.content_digest.as_bytes().len() as u64,
-            }
-        ).await;
+    for descriptor in evidence_descriptors {
+        evidence_blob_store.put_descriptor(descriptor).await?;
     }
 
     Ok(BundleExport {
@@ -188,21 +194,31 @@ async fn fetch_nodes<E: EvidenceNodeStore>(
     store: &E,
     node_ids: &[String],
 ) -> Result<Vec<EvidenceNodeRecord>, BundleExportError> {
-    let mut nodes = Vec::new();
+    let mut nodes = Vec::with_capacity(node_ids.len());
+    let mut missing = Vec::new();
     for id in node_ids {
         let node = store.get(id).await?;
         if let Some(node) = node {
             nodes.push(node);
+        } else {
+            missing.push(id.clone());
         }
     }
-    Ok(nodes)
+    if missing.is_empty() {
+        Ok(nodes)
+    } else {
+        Err(BundleExportError::IncompleteEvidence {
+            required: node_ids.to_vec(),
+            missing,
+        })
+    }
 }
 
 /// Stores an evidence node's payload in the content-addressed blob store.
 async fn store_evidence_blob<Eb: EvidenceObjectStore>(
     store: &Eb,
     node: &EvidenceNodeRecord,
-) -> Result<ContentDigest, BundleExportError> {
+) -> Result<(ContentDigest, u64), BundleExportError> {
     // The content digest is already the content address; store the payload.
     let payload = serde_json::json!({
         "node_id": node.node_id_hex,
@@ -225,9 +241,12 @@ async fn store_evidence_blob<Eb: EvidenceObjectStore>(
         BundleExportError::Serialization(format!("failed to serialize evidence blob: {e}"))
     })?;
 
-    store.put(&payload_bytes).await.map_err(|e| {
-        BundleExportError::Storage(e)
-    })
+    let size_bytes = payload_bytes.len() as u64;
+    let digest = store
+        .put(&payload_bytes)
+        .await
+        .map_err(BundleExportError::Storage)?;
+    Ok((digest, size_bytes))
 }
 
 /// Assembles a bundle manifest JSON value.

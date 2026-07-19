@@ -128,6 +128,8 @@ pub enum AdapterError {
     /// does not name the protocol error type, keeping Piteka's dependency on the
     /// contract confined to the public SDK facade.
     InvalidIntent(String),
+    /// A receipt failed Parwana's binding or canonical validation.
+    InvalidReceipt(String),
     /// A canonical envelope was malformed or its bytes failed to round-trip.
     CorruptCanonicalObject,
 }
@@ -141,6 +143,7 @@ impl fmt::Display for AdapterError {
                  but the linked SDK reports {found}"
             ),
             Self::InvalidIntent(reason) => write!(f, "invalid action intent: {reason}"),
+            Self::InvalidReceipt(reason) => write!(f, "invalid execution receipt: {reason}"),
             Self::CorruptCanonicalObject => {
                 f.write_str("canonical accountability object is malformed")
             }
@@ -306,6 +309,35 @@ impl ParwanaContract {
     ) -> Result<ActionIntent, AdapterError> {
         accountability::action_intent_from_wire(wire)
             .map_err(|error| AdapterError::InvalidIntent(format!("{error:?}")))
+    }
+
+    /// Encodes a signed execution receipt with Parwana's sole canonical
+    /// serializer after validating its mandate and attempt bindings.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError::InvalidReceipt`] when the receipt is malformed
+    /// or does not bind exactly to `mandate` and `attempt`.
+    pub fn encode_execution_receipt(
+        &self,
+        receipt: &protocol::ExecutionReceipt,
+        mandate: &protocol::ActionMandate,
+        attempt: &protocol::ExecutionAttempt,
+    ) -> Result<CanonicalObject, AdapterError> {
+        let bytes = receipt
+            .canonical_bytes(mandate, attempt)
+            .map_err(|error| AdapterError::InvalidReceipt(format!("{error:?}")))?;
+        let object_id = receipt
+            .id(mandate, attempt)
+            .map_err(|error| AdapterError::InvalidReceipt(format!("{error:?}")))?
+            .into_bytes();
+        let wire = protocol::CanonicalAccountabilityObjectWire::new(
+            protocol::AccountabilityObjectKind::ExecutionReceipt,
+            object_id,
+            &bytes,
+        )
+        .map_err(|reason| AdapterError::InvalidReceipt(reason.to_string()))?;
+        Ok(CanonicalObject { wire })
     }
 }
 

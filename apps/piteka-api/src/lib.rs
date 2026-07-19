@@ -48,12 +48,10 @@ pub use models::{
     RejectRequest, RevokeRequest,
 };
 
+use crate::error::{ErrorCause, ErrorDetail};
 use axum::{extract::Request, middleware::Next, response::IntoResponse};
 use piteka_application::ActionRequestUseCase;
-use piteka_storage::{
-    ActionRequestStore, ApprovalDecisionStore, AuditLog,
-};
-use crate::error::{ErrorCause, ErrorDetail};
+use piteka_storage::{ActionRequestStore, ApprovalDecisionStore, AuditLog};
 
 /// OpenAPI schema for the first-slice API (checked in at `openapi/openapi.yaml`).
 ///
@@ -116,18 +114,34 @@ pub struct TestPorts {
 impl TestPorts {
     pub fn new() -> Self {
         Self {
-            request_store: std::sync::Arc::new(piteka_storage::memory::InMemoryActionRequestStore::default()),
-            decision_store: std::sync::Arc::new(piteka_storage::memory::InMemoryApprovalDecisionStore::default()),
+            request_store: std::sync::Arc::new(
+                piteka_storage::memory::InMemoryActionRequestStore::default(),
+            ),
+            decision_store: std::sync::Arc::new(
+                piteka_storage::memory::InMemoryApprovalDecisionStore::default(),
+            ),
             audit_log: std::sync::Arc::new(piteka_storage::memory::InMemoryAuditLog::default()),
-            webhook_receipt_store: std::sync::Arc::new(piteka_storage::memory::InMemoryWebhookReceiptStore::default()),
+            webhook_receipt_store: std::sync::Arc::new(
+                piteka_storage::memory::InMemoryWebhookReceiptStore::default(),
+            ),
             github_adapter: std::sync::Arc::new(MockGitHubAdapter::default()),
             webhook_processor: MockWebhookProcessor::default(),
             // E-06: Receipt and evidence stores.
-            receipt_store: std::sync::Arc::new(piteka_storage::memory::InMemoryReceiptProjectionStore::default()),
-            evidence_store: std::sync::Arc::new(piteka_storage::memory::InMemoryEvidenceNodeStore::default()),
-            evidence_blob_store: std::sync::Arc::new(piteka_storage::memory::InMemoryEvidenceStore::default()),
-            protocol_store: std::sync::Arc::new(piteka_storage::memory::InMemoryProtocolObjectStore::default()),
-            attempt_store: std::sync::Arc::new(piteka_storage::memory::InMemoryExecutionAttemptStore::default()),
+            receipt_store: std::sync::Arc::new(
+                piteka_storage::memory::InMemoryReceiptProjectionStore::default(),
+            ),
+            evidence_store: std::sync::Arc::new(
+                piteka_storage::memory::InMemoryEvidenceNodeStore::default(),
+            ),
+            evidence_blob_store: std::sync::Arc::new(
+                piteka_storage::memory::InMemoryEvidenceStore::default(),
+            ),
+            protocol_store: std::sync::Arc::new(
+                piteka_storage::memory::InMemoryProtocolObjectStore::default(),
+            ),
+            attempt_store: std::sync::Arc::new(
+                piteka_storage::memory::InMemoryExecutionAttemptStore::default(),
+            ),
         }
     }
 
@@ -149,6 +163,19 @@ impl TestPorts {
             self.audit_log.clone(),
         );
         piteka_application::WebhookIngestionUseCase::new(ports)
+    }
+
+    /// Returns HTTP state for the GitHub webhook endpoint.
+    pub fn webhook_state(&self) -> webhook::WebhookStateConcrete {
+        webhook::WebhookStateConcrete {
+            ingestion: self.webhook_ingestion(),
+            clock: piteka_application::SystemClock,
+            github: self.github_adapter.clone(),
+            webhook_secret: piteka_ports::github::GitHubWebhookSecret::new(
+                "test-webhook-secret-reference",
+            )
+            .expect("static secret reference is non-empty"),
+        }
     }
 }
 
@@ -201,9 +228,21 @@ impl piteka_application::Clock for TestClock {
 }
 
 /// A mock GitHub adapter for testing webhook signature verification.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct MockGitHubAdapter {
-    pub verify_result: std::sync::Arc<std::sync::Mutex<Option<piteka_ports::github::WebhookSignatureResult>>>,
+    pub verify_result:
+        std::sync::Arc<std::sync::Mutex<Option<piteka_ports::github::WebhookSignatureResult>>>,
+}
+
+impl Default for MockGitHubAdapter {
+    fn default() -> Self {
+        Self {
+            // Fail closed unless a test explicitly enables authentication.
+            verify_result: std::sync::Arc::new(std::sync::Mutex::new(Some(
+                piteka_ports::github::WebhookSignatureResult::Invalid,
+            ))),
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -248,9 +287,10 @@ impl piteka_ports::github::GitHubAppPort for MockGitHubAdapter {
         &self,
         _payload: &piteka_ports::github::GitHubWebhookPayload,
         _webhook_secret: &piteka_ports::github::GitHubWebhookSecret,
-    ) -> Result<piteka_ports::github::WebhookSignatureResult, piteka_ports::github::GitHubAppError> {
-        let mut guard = self.verify_result.lock().expect("lock poisoned");
-        Ok(guard.take().unwrap_or(piteka_ports::github::WebhookSignatureResult::Valid))
+    ) -> Result<piteka_ports::github::WebhookSignatureResult, piteka_ports::github::GitHubAppError>
+    {
+        let guard = self.verify_result.lock().expect("lock poisoned");
+        Ok(guard.unwrap_or(piteka_ports::github::WebhookSignatureResult::Invalid))
     }
 
     async fn create_deployment(
@@ -276,7 +316,8 @@ impl piteka_ports::github::GitHubAppPort for MockGitHubAdapter {
             repository_id: piteka_ports::github::GitHubRepositoryId::new("1").unwrap(),
             repository_name: piteka_ports::github::GitHubRepositoryName::new("demo/demo").unwrap(),
             environment_id: piteka_ports::github::GitHubEnvironmentId::new("1").unwrap(),
-            environment_name: piteka_ports::github::GitHubEnvironmentName::new("production").unwrap(),
+            environment_name: piteka_ports::github::GitHubEnvironmentName::new("production")
+                .unwrap(),
         }
     }
 

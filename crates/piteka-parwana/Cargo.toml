@@ -10,9 +10,9 @@ rust-version.workspace = true
 # `csv-sdk` facade at an EXACT pinned version — `latest` is prohibited in CI and
 # deployments — mirroring development/contract-pins/piteka.toml. Default features
 # (chain adapters requiring C libraries, tokio, wallet, native FS) are disabled;
-# only the always-present accountability facade is needed.
+# only the explicitly selected Accountability capability is needed.
 [dependencies]
-csv-sdk = { version = "=0.1.5", path = "../../../parwana/csv-sdk", default-features = false, features = ["std"] }
+csv-sdk = { version = "=0.1.5", path = "../../../parwana/csv-sdk", default-features = false, features = ["std", "accountability"] }
 
 [lints.rust]
 unsafe_code = "forbid"

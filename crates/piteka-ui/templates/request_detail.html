@@ -37,7 +37,7 @@
       <span class="pk-intent-field-label">Commit</span>
       <span class="pk-intent-field-value">
         <span class="pk-hash-field" tabindex="0" role="button" aria-label="Copy commit SHA {{ intent.commit_sha }}">
-          {{ intent.commit_sha | truncate_hash }}
+          {{ intent.commit_sha|truncate_hash }}
           <span class="hash-tooltip">{{ intent.commit_sha }}</span>
         </span>
       </span>
@@ -72,7 +72,7 @@
       <span class="pk-intent-field-label">Intent fingerprint</span>
       <span class="pk-intent-field-value">
         <span class="pk-hash-field" tabindex="0" role="button" aria-label="Copy intent digest {{ intent.digest }}">
-          {{ intent.digest | truncate_hash }}
+          {{ intent.digest|truncate_hash }}
           <span class="hash-tooltip">{{ intent.digest }}</span>
         </span>
       </span>
@@ -123,7 +123,7 @@
       <tr>
         <td>
           <span class="pk-identity-badge">
-            <span class="pk-identity-avatar" aria-hidden="true">{{ dec.decided_by | first_char }}</span>
+            <span class="pk-identity-avatar" aria-hidden="true">{{ dec.decided_by|first_char }}</span>
             {{ dec.decided_by }}
           </span>
         </td>
@@ -160,7 +160,6 @@
   </button>
   <form method="post" action="/api/v1/action-requests/{{ request.id }}/reject" style="display:inline;">
     <button type="submit" class="pk-btn pk-btn-destructive"
-            {% if request.decisions.iter().any(|d| d.decision == "approved") %}disabled{% endif %}
             aria-label="Reject request {{ request.id }}">
       Reject
     </button>

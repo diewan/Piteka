@@ -4,7 +4,9 @@ pub mod action_request;
 pub mod authz;
 pub mod bundle_export;
 pub mod dispatch;
+pub mod mcp;
 pub mod receipt_production;
+pub mod reconciliation;
 pub mod session;
 pub mod webhook_ingestion;
 
@@ -13,9 +15,13 @@ mod action_request_tests;
 #[cfg(test)]
 mod authz_tests;
 #[cfg(test)]
+mod bundle_export_tests;
+#[cfg(test)]
 mod dispatch_tests;
 #[cfg(test)]
 mod receipt_production_tests;
+#[cfg(test)]
+mod reconciliation_tests;
 #[cfg(test)]
 mod session_tests;
 
@@ -35,6 +41,10 @@ pub use receipt_production::{
 pub use session::{
     AuthError, AuthenticatedSession, SessionAuthority, SessionSigner, Signature, SignatureAlgorithm,
     SignedSession,
+};
+pub use reconciliation::{
+    CorrelatedDeployment, DeploymentStatusProvider, ReconciliationError, ReconciliationOutcome,
+    ReconciliationPorts, ReconciliationUseCase,
 };
 pub use webhook_ingestion::{
     IngestionOutcome, WebhookEventProcessor, WebhookIngestionPorts, WebhookIngestionUseCase,

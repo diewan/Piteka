@@ -11,16 +11,27 @@ use axum::{
 };
 use piteka_api::TestPorts;
 use piteka_application::ActionRequestUseCase;
-use piteka_domain::UserId;
+use piteka_storage::ActionRequestStatus;
 use piteka_ui::{
-    DecisionRow, IntentPanelData, PlaceholderPage, RequestDetailPage, RequestDetailRow,
-    WorkQueuePage, WorkQueueRow,
+    DecisionRow, IntentPanelData, RequestDetailRow, WorkQueueRow,
 };
 
 use crate::{
-    first_char, format_expiry, format_timestamp, status_for_decision, status_for_request,
-    truncate_hash,
+    format_timestamp, status_for_decision, status_for_request,
 };
+
+mod filters {
+    pub use crate::{first_char, truncate_hash};
+}
+
+fn request_status(status: ActionRequestStatus) -> &'static str {
+    match status {
+        ActionRequestStatus::Pending => "Pending",
+        ActionRequestStatus::Approved => "Approved",
+        ActionRequestStatus::Rejected => "Rejected",
+        ActionRequestStatus::Revoked => "Revoked",
+    }
+}
 
 /// Work queue page (S1).
 #[derive(Template)]
@@ -49,6 +60,19 @@ pub struct ExecutionsTemplate {
     pub current_page: String,
 }
 
+/// A visible, evidence-backed replay rejection on S3/S4.
+#[derive(Template)]
+#[template(path = "replay_rejection.html", escape = "html")]
+pub struct ReplayRejectionTemplate {
+    pub title: String,
+    pub current_page: String,
+    pub reason_code: String,
+    pub mandate_id: String,
+    pub executor_identity: String,
+    pub mandate_state: String,
+    pub message: String,
+}
+
 /// Case files page (S5).
 #[derive(Template)]
 #[template(path = "case_files.html", escape = "none")]
@@ -75,18 +99,18 @@ pub struct SettingsTemplate {
 
 /// GET /work-queue — Work queue (S1).
 pub async fn work_queue(State(use_case): State<ActionRequestUseCase<TestPorts>>) -> Html<String> {
-    let requests = use_case.list_requests().unwrap_or_default();
+    let requests = use_case.list_requests().await.unwrap_or_default();
 
     let rows: Vec<WorkQueueRow> = requests
         .into_iter()
         .map(|r| {
-            let (status_class, status_icon, status_label) =
-                status_for_request(&r.status.to_string());
+            let status = request_status(r.status).to_string();
+            let (status_class, status_icon, status_label) = status_for_request(&status);
             let (human, iso) = format_timestamp(r.created_at_unix_seconds as u64);
             WorkQueueRow {
                 id: r.request_id,
                 requested_by: r.requested_by,
-                status: r.status.to_string(),
+                status,
                 status_class,
                 status_icon,
                 status_label,
@@ -136,7 +160,8 @@ pub async fn request_detail(
         .await
         .unwrap_or_default();
 
-    let (status_class, status_icon, status_label) = status_for_request(&request.status.to_string());
+    let status = request_status(request.status).to_string();
+    let (status_class, status_icon, status_label) = status_for_request(&status);
     let (req_human, req_iso) = format_timestamp(request.created_at_unix_seconds as u64);
 
     let decision_rows: Vec<DecisionRow> = decisions
@@ -158,7 +183,7 @@ pub async fn request_detail(
     let request_row = RequestDetailRow {
         id: request.request_id,
         requested_by: request.requested_by,
-        status: request.status.to_string(),
+        status,
         status_class,
         status_icon,
         status_label,

@@ -32,18 +32,12 @@
 //! Execution credentials (GitHub private key) never leave the adapter layer.
 //! The raw reservation token is secret and is never written to exported bundles.
 
-use piteka_domain::UserId;
-use piteka_storage::memory::InMemoryMandateProjectionStore;
-use piteka_storage::model::{
-    ExecutionAttempt, ExecutionAttemptState, ReceiptOutcome,
-};
+use piteka_storage::model::{ExecutionAttempt, ExecutionAttemptState, ReceiptOutcome};
 use piteka_storage::ports::{
     ActionRequestStore, AuditLog, ExecutionAttemptStore, MandateProjectionStore,
     ReceiptProjectionStore,
 };
-use piteka_storage::{
-    ActionRequestStatus, CasOutcome, StorageError, StorageResult,
-};
+use piteka_storage::{ActionRequestStatus, CasOutcome, StorageError};
 
 use crate::Clock;
 
@@ -59,19 +53,17 @@ pub enum DispatchError {
     /// The action request was not found.
     NotFound(String),
     /// The request status does not allow dispatch.
-    InvalidTransition {
-        current: ActionRequestStatus,
-    },
+    InvalidTransition { current: ActionRequestStatus },
     /// The mandate projection was not found.
     MandateNotFound(String),
     /// Reservation failed due to a concurrent winner.
-    ReservationConflict {
-        current_version: i64,
-    },
+    ReservationConflict { current_version: i64 },
     /// The mandate was already consumed or in a terminal state.
     AlreadyConsumed(String),
     /// The GitHub dispatch call failed.
     DispatchFailed(String),
+    /// GitHub reported acceptance without the required deployment ID.
+    InvalidProviderResponse(String),
     /// The executor identity does not match the allowed subject.
     UnauthorizedExecutor(String),
 }
@@ -101,6 +93,7 @@ impl core::fmt::Display for DispatchError {
                 write!(f, "mandate `{id}` is already consumed or terminal")
             }
             Self::DispatchFailed(msg) => write!(f, "dispatch to provider failed: {msg}"),
+            Self::InvalidProviderResponse(msg) => write!(f, "invalid provider response: {msg}"),
             Self::UnauthorizedExecutor(executor) => {
                 write!(f, "executor `{executor}` is not the authorized subject")
             }
@@ -171,12 +164,33 @@ pub enum DispatchOutcome {
     Dispatched(Dispatched),
     /// Another caller won the reservation.
     ReservationFailed(ReservationFailed),
+    /// A second use of a terminal single-use mandate was rejected before any
+    /// provider call. The appended audit event is the Piteka-produced evidence
+    /// of the rejected attempt.
+    ReplayRejected(ReplayRejection),
     /// The dispatch failed (mandate quarantined).
     DispatchFailed {
         mandate_id_hex: String,
         attempt_id_hex: String,
         error: String,
     },
+}
+
+/// Evidence returned for a rejected repeat use of a single-use mandate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayRejection {
+    /// Stable reason code suitable for MCP and UI surfaces.
+    pub reason_code: &'static str,
+    /// The mandate whose repeat use was rejected.
+    pub mandate_id_hex: String,
+    /// The request presented by the repeat caller.
+    pub request_id: String,
+    /// Identity that attempted the repeat use.
+    pub executor_identity: String,
+    /// Authoritative terminal state observed by Piteka.
+    pub mandate_state: String,
+    /// Human-readable sentence defined by the product language authority.
+    pub message: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -209,11 +223,7 @@ pub trait DispatchPorts: Send + Sync {
 /// E-04: The digest is a SHA-256 over the attempt ID, mandate ID, and intent ID.
 /// It is incorporated into the GitHub deployment payload so that incoming
 /// webhooks can be correlated back to the Piteka execution attempt.
-pub fn compute_attempt_digest(
-    attempt_id: &str,
-    mandate_id: &str,
-    intent_id: &str,
-) -> [u8; 32] {
+pub fn compute_attempt_digest(attempt_id: &str, mandate_id: &str, intent_id: &str) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(attempt_id.as_bytes());
@@ -309,6 +319,7 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
     ///
     /// To perform the full reserve → dispatch → consume flow in one call,
     /// use [`DispatchUseCase::reserve_and_dispatch`].
+    #[allow(clippy::too_many_arguments)]
     pub async fn reserve(
         &self,
         request_id: &str,
@@ -359,23 +370,18 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
                     github_deployment_id: None,
                 };
 
-                self.ports
-                    .attempt_store()
-                    .insert(attempt)
-                    .await?;
+                self.ports.attempt_store().insert(attempt).await?;
 
                 // 4. Transition attempt to Dispatching.
                 self.ports
                     .attempt_store()
-                    .update_state(
-                        &attempt_id_hex,
-                        ExecutionAttemptState::Dispatching,
-                    )
+                    .update_state(&attempt_id_hex, ExecutionAttemptState::Dispatching)
                     .await?;
 
                 // 5. Record audit event.
-                self.ports.audit_log().append(
-                    piteka_storage::AuditEvent {
+                self.ports
+                    .audit_log()
+                    .append(piteka_storage::AuditEvent {
                         occurred_at_unix_seconds: now,
                         actor: Some(executor_identity.to_string()),
                         action: "reserve_mandate".to_string(),
@@ -384,8 +390,8 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
                             "mandate {} reserved for request {}, attempt {}, version {}",
                             mandate_id_hex, request_id, attempt_id_hex, expected_mandate_version
                         ),
-                    },
-                ).await?;
+                    })
+                    .await?;
 
                 Ok(DispatchOutcome::Dispatched(Dispatched {
                     mandate_id_hex: mandate_id_hex.to_string(),
@@ -398,16 +404,50 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
                 }))
             }
             CasOutcome::Conflict { current_version } => {
-                Ok(DispatchOutcome::ReservationFailed(
-                    ReservationFailed {
-                        mandate_id_hex: mandate_id_hex.to_string(),
-                        winner_version: current_version,
-                    },
-                ))
+                // A conflict against a terminal live-state projection is not a
+                // routine race: it is a repeat-use attempt. Record it before
+                // returning so the rejection itself becomes append-only
+                // evidence. A merely reserved mandate remains a normal
+                // concurrent reservation conflict.
+                if let Some(projection) = self.ports.mandate_store().get(mandate_id_hex).await? {
+                    if matches!(
+                        projection.state.as_str(),
+                        "consumed" | "quarantined" | "abandoned"
+                    ) {
+                        let reason_code = "MANDATE.REPLAY_DETECTED";
+                        let message = format!(
+                            "Repeat use rejected. Approval {mandate_id_hex} was already used; nothing was sent to GitHub."
+                        );
+                        self.ports
+                            .audit_log()
+                            .append(piteka_storage::AuditEvent {
+                                occurred_at_unix_seconds: now,
+                                actor: Some(executor_identity.to_string()),
+                                action: "execute_approved_deployment".to_string(),
+                                decision: "denied".to_string(),
+                                detail: format!(
+                                    "{reason_code}: mandate {mandate_id_hex} is {}; request {request_id}; provider dispatch suppressed",
+                                    projection.state
+                                ),
+                            })
+                            .await?;
+
+                        return Ok(DispatchOutcome::ReplayRejected(ReplayRejection {
+                            reason_code,
+                            mandate_id_hex: mandate_id_hex.to_string(),
+                            request_id: request_id.to_string(),
+                            executor_identity: executor_identity.to_string(),
+                            mandate_state: projection.state,
+                            message,
+                        }));
+                    }
+                }
+                Ok(DispatchOutcome::ReservationFailed(ReservationFailed {
+                    mandate_id_hex: mandate_id_hex.to_string(),
+                    winner_version: current_version,
+                }))
             }
-            CasOutcome::Missing => {
-                Err(DispatchError::MandateNotFound(mandate_id_hex.to_string()))
-            }
+            CasOutcome::Missing => Err(DispatchError::MandateNotFound(mandate_id_hex.to_string())),
         }
     }
 
@@ -432,6 +472,7 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
     /// * `deployment_id` — The GitHub-assigned deployment ID, if the provider accepted.
     /// * `executor_identity` — The executor identity (for audit).
     /// * `expected_mandate_version` — Expected version for CAS on mandate.
+    #[allow(clippy::too_many_arguments)]
     pub async fn complete_dispatch(
         &self,
         attempt_id_hex: &str,
@@ -443,24 +484,26 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
         expected_mandate_version: i64,
     ) -> Result<(), DispatchError> {
         let now = self.ports.clock().unix_seconds() as i64;
+        let missing_deployment_id = provider_accepted && deployment_id.is_none();
+        // An acceptance response without GitHub's required ID is ambiguous:
+        // quarantine it through the normal uncertainty path, then surface the
+        // malformed response to the caller.
+        let provider_accepted = provider_accepted && !missing_deployment_id;
 
         if provider_accepted {
+            let deployment_id = deployment_id.expect("checked above");
+
             // Provider accepted: transition attempt to Accepted, mandate to Consumed.
             self.ports
                 .attempt_store()
-                .update_state(
-                    attempt_id_hex,
-                    ExecutionAttemptState::Accepted,
-                )
+                .update_state(attempt_id_hex, ExecutionAttemptState::Accepted)
                 .await?;
 
             // Record the GitHub deployment ID for webhook correlation (E-04).
-            if let Some(deploy_id) = deployment_id {
-                self.ports
-                    .attempt_store()
-                    .update_deployment_id(attempt_id_hex, deploy_id)
-                    .await?;
-            }
+            self.ports
+                .attempt_store()
+                .update_deployment_id(attempt_id_hex, deployment_id)
+                .await?;
 
             // CAS the mandate to Consumed.
             let cas_result = self
@@ -473,8 +516,9 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
                 CasOutcome::Applied { .. } => {
                     // Record the receipt.
                     let receipt_id_hex = format!("rcpt-{}", attempt_id_hex);
-                    self.ports.receipt_store().insert(
-                        piteka_storage::ReceiptProjection {
+                    self.ports
+                        .receipt_store()
+                        .insert(piteka_storage::ReceiptProjection {
                             receipt_id_hex,
                             mandate_id_hex: mandate_id_hex.to_string(),
                             intent_id_hex: intent_id_hex.to_string(),
@@ -485,12 +529,13 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
                             target_evidence_refs: vec![],
                             evidence_gaps: vec![],
                             canonical_bytes: None,
-                        },
-                    ).await?;
+                        })
+                        .await?;
 
                     // Audit.
-                    self.ports.audit_log().append(
-                        piteka_storage::AuditEvent {
+                    self.ports
+                        .audit_log()
+                        .append(piteka_storage::AuditEvent {
                             occurred_at_unix_seconds: now,
                             actor: Some(executor_identity.to_string()),
                             action: "consume_mandate".to_string(),
@@ -499,30 +544,23 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
                                 "mandate {} consumed after provider acceptance, attempt {}",
                                 mandate_id_hex, attempt_id_hex
                             ),
-                        },
-                    ).await?;
+                        })
+                        .await?;
                 }
                 CasOutcome::Conflict { .. } => {
                     // Another caller already consumed the mandate.
                     // This should not happen in normal flow, but we handle it.
-                    return Err(DispatchError::AlreadyConsumed(
-                        mandate_id_hex.to_string(),
-                    ));
+                    return Err(DispatchError::AlreadyConsumed(mandate_id_hex.to_string()));
                 }
                 CasOutcome::Missing => {
-                    return Err(DispatchError::MandateNotFound(
-                        mandate_id_hex.to_string(),
-                    ));
+                    return Err(DispatchError::MandateNotFound(mandate_id_hex.to_string()));
                 }
             }
         } else {
             // Provider failed or outcome ambiguous: transition to Quarantined.
             self.ports
                 .attempt_store()
-                .update_state(
-                    attempt_id_hex,
-                    ExecutionAttemptState::OutcomeAmbiguous,
-                )
+                .update_state(attempt_id_hex, ExecutionAttemptState::OutcomeAmbiguous)
                 .await?;
 
             // CAS the mandate to Quarantined.
@@ -536,8 +574,9 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
                 CasOutcome::Applied { .. } => {
                     // Record the receipt with Unknown outcome.
                     let receipt_id_hex = format!("rcpt-{}", attempt_id_hex);
-                    self.ports.receipt_store().insert(
-                        piteka_storage::ReceiptProjection {
+                    self.ports
+                        .receipt_store()
+                        .insert(piteka_storage::ReceiptProjection {
                             receipt_id_hex,
                             mandate_id_hex: mandate_id_hex.to_string(),
                             intent_id_hex: intent_id_hex.to_string(),
@@ -548,12 +587,13 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
                             target_evidence_refs: vec![],
                             evidence_gaps: vec![],
                             canonical_bytes: None,
-                        },
-                    ).await?;
+                        })
+                        .await?;
 
                     // Audit.
-                    self.ports.audit_log().append(
-                        piteka_storage::AuditEvent {
+                    self.ports
+                        .audit_log()
+                        .append(piteka_storage::AuditEvent {
                             occurred_at_unix_seconds: now,
                             actor: Some(executor_identity.to_string()),
                             action: "quarantine_mandate".to_string(),
@@ -562,22 +602,26 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
                                 "mandate {} quarantined after provider failure, attempt {}",
                                 mandate_id_hex, attempt_id_hex
                             ),
-                        },
-                    ).await?;
+                        })
+                        .await?;
                 }
                 CasOutcome::Conflict { .. } => {
                     // Mandate was already consumed by another path.
                     // The attempt is already in OutcomeAmbiguous state.
                 }
                 CasOutcome::Missing => {
-                    return Err(DispatchError::MandateNotFound(
-                        mandate_id_hex.to_string(),
-                    ));
+                    return Err(DispatchError::MandateNotFound(mandate_id_hex.to_string()));
                 }
             }
         }
 
-        Ok(())
+        if missing_deployment_id {
+            Err(DispatchError::InvalidProviderResponse(
+                "accepted GitHub deployment response did not include a deployment ID".to_string(),
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     /// Full atomic reserve-and-dispatch in one call.
@@ -602,6 +646,7 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
     /// * `dispatch_fn` — A closure that performs the actual provider dispatch.
     ///   It receives the correlation key and attempt digest, and returns
     ///   `Some(deployment_id)` if the provider accepted, `None` otherwise.
+    #[allow(clippy::too_many_arguments)]
     pub async fn reserve_and_dispatch<F>(
         &self,
         request_id: &str,
@@ -617,25 +662,32 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
         F: FnOnce(&str, [u8; 32]) -> Option<u64>,
     {
         // Step 1: Reserve the mandate.
-        let reserve_result = self.reserve(
-            request_id,
-            mandate_id_hex,
-            intent_id_hex,
-            executor_identity,
-            reservation_token_digest,
-            correlation_key,
-            expected_mandate_version,
-        ).await?;
+        let reserve_result = self
+            .reserve(
+                request_id,
+                mandate_id_hex,
+                intent_id_hex,
+                executor_identity,
+                reservation_token_digest,
+                correlation_key,
+                expected_mandate_version,
+            )
+            .await?;
 
         match &reserve_result {
+            DispatchOutcome::ReplayRejected(rejection) => {
+                // Terminal mandates fail before the provider closure is
+                // invoked. Preserve the structured rejection for MCP/UI.
+                Ok(DispatchOutcome::ReplayRejected(rejection.clone()))
+            }
             DispatchOutcome::ReservationFailed(failed) => {
                 // Another caller won; return immediately.
                 let failed_copy = failed.clone();
-                return Ok(DispatchOutcome::ReservationFailed(failed_copy));
+                Ok(DispatchOutcome::ReservationFailed(failed_copy))
             }
             DispatchOutcome::DispatchFailed { .. } => {
                 // Reserve already quarantined the mandate.
-                return Ok(reserve_result);
+                Ok(reserve_result)
             }
             DispatchOutcome::Dispatched(dispatched) => {
                 // Step 2: Compute the attempt digest for provider correlation (E-04).
@@ -661,7 +713,8 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
                         Some(deploy_id),
                         executor_identity,
                         cas_version,
-                    ).await?;
+                    )
+                    .await?;
 
                     // Update the dispatched result to reflect provider acceptance.
                     let dispatched_owned = dispatched.clone();
@@ -680,7 +733,8 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
                         None,
                         executor_identity,
                         cas_version,
-                    ).await?;
+                    )
+                    .await?;
 
                     Ok(DispatchOutcome::DispatchFailed {
                         mandate_id_hex: mandate_id_hex.to_string(),

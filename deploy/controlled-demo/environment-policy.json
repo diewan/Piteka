@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "purpose": "piteka-controlled-deployment-demo-only",
+  "customer_production_data_allowed": false,
+  "environment": "piteka-demo-production",
+  "protection": {
+    "required_reviewers": [],
+    "wait_timer_minutes": 0,
+    "custom_deployment_protection_rules": [],
+    "deployment_branch_policy": null
+  }
+}

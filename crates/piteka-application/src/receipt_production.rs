@@ -30,15 +30,15 @@ use sha2::{Digest, Sha256};
 
 use piteka_storage::digest::ContentDigest;
 use piteka_storage::model::{
-    EvidenceNodeRecord, EvidenceSource, ExecutionAttemptState, ReceiptOutcome, ReceiptProjection,
+    EvidenceNodeRecord, EvidenceSource, ReceiptOutcome, ReceiptProjection,
 };
 use piteka_storage::ports::{
     AuditLog, EvidenceNodeStore, ExecutionAttemptStore, ReceiptProjectionStore,
 };
 
 use crate::Clock;
-use crate::webhook_ingestion::error::{WebhookError, WebhookResult};
 use crate::webhook_ingestion::WebhookEventProcessor;
+use crate::webhook_ingestion::error::{WebhookError, WebhookResult};
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -106,11 +106,27 @@ pub fn parse_deployment_status(payload: &[u8]) -> Option<DeploymentStatusEvent> 
         .get("description")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let target_url = value.get("target_url").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let updated_at = value
-        .get("updated_at")
-        .and_then(|v| v.as_u64())
-        .or_else(|| value.get("updated_at").and_then(|v| v.as_i64()).map(|v| v as u64))?;
+    let target_url = value
+        .get("target_url")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    // GitHub's API uses an ISO-8601 string. Numeric timestamps remain accepted
+    // for retained fixtures, but negative values must never wrap into the
+    // distant future.
+    let updated_at_value = value.get("updated_at")?;
+    let updated_at = if let Some(value) = updated_at_value.as_u64() {
+        value
+    } else if let Some(value) = updated_at_value.as_i64() {
+        u64::try_from(value).ok()?
+    } else {
+        let value = updated_at_value.as_str()?;
+        u64::try_from(
+            chrono::DateTime::parse_from_rfc3339(value)
+                .ok()?
+                .timestamp(),
+        )
+        .ok()?
+    };
 
     Some(DeploymentStatusEvent {
         deployment_id,
@@ -325,10 +341,12 @@ where
     let attempt = attempt_store
         .by_deployment_id(event.deployment_id)
         .await?
-        .ok_or_else(|| ReceiptProductionError::AttemptNotFound(format!(
-            "no attempt found for deployment_id={}",
-            event.deployment_id
-        )))?;
+        .ok_or_else(|| {
+            ReceiptProductionError::AttemptNotFound(format!(
+                "no attempt found for deployment_id={}",
+                event.deployment_id
+            ))
+        })?;
 
     let attempt_id_hex = &attempt.attempt_id_hex;
     let mandate_id_hex = &attempt.mandate_id_hex;
@@ -378,24 +396,27 @@ where
     receipt_store.insert(receipt).await?;
 
     // 7. Audit.
-    let _ = audit_log.append(piteka_storage::model::AuditEvent {
-        occurred_at_unix_seconds: now,
-        actor: None,
-        action: "receipt.produced".to_string(),
-        decision: outcome_as_str(&outcome).to_string(),
-        detail: format!(
-            "receipt={} mandate={} attempt={} github_state={} outcome={}",
-            receipt_id_hex, mandate_id_hex, attempt_id_hex, event.state, outcome_as_str(&outcome)
-        ),
-    });
+    audit_log
+        .append(piteka_storage::model::AuditEvent {
+            occurred_at_unix_seconds: now,
+            actor: None,
+            action: "receipt.produced".to_string(),
+            decision: outcome_as_str(&outcome).to_string(),
+            detail: format!(
+                "receipt={} mandate={} attempt={} github_state={} outcome={}",
+                receipt_id_hex,
+                mandate_id_hex,
+                attempt_id_hex,
+                event.state,
+                outcome_as_str(&outcome)
+            ),
+        })
+        .await?;
 
     Ok(ReceiptProductionResult {
         receipt_id_hex,
         outcome,
-        evidence_node_ids: vec![
-            observation_node.node_id_hex,
-            claim_node.node_id_hex,
-        ],
+        evidence_node_ids: vec![observation_node.node_id_hex, claim_node.node_id_hex],
         evidence_gaps,
     })
 }
@@ -490,43 +511,52 @@ where
         .await
         {
             Ok(result) => {
-                let _ = self.audit_log.append(piteka_storage::model::AuditEvent {
-                    occurred_at_unix_seconds: clock.unix_seconds() as i64,
-                    actor: None,
-                    action: "webhook.receipt_produced".to_string(),
-                    decision: outcome_as_str(&result.outcome).to_string(),
-                    detail: format!(
-                        "delivery_id={} receipt={} outcome={} evidence_nodes={} gaps={}",
-                        delivery_id,
-                        result.receipt_id_hex,
-                        outcome_as_str(&result.outcome),
-                        result.evidence_node_ids.len(),
-                        result.evidence_gaps.len()
-                    ),
-                });
+                let _ = self
+                    .audit_log
+                    .append(piteka_storage::model::AuditEvent {
+                        occurred_at_unix_seconds: clock.unix_seconds() as i64,
+                        actor: None,
+                        action: "webhook.receipt_produced".to_string(),
+                        decision: outcome_as_str(&result.outcome).to_string(),
+                        detail: format!(
+                            "delivery_id={} receipt={} outcome={} evidence_nodes={} gaps={}",
+                            delivery_id,
+                            result.receipt_id_hex,
+                            outcome_as_str(&result.outcome),
+                            result.evidence_node_ids.len(),
+                            result.evidence_gaps.len()
+                        ),
+                    })
+                    .await;
                 Ok(())
             }
             Err(ReceiptProductionError::AttemptNotFound(_)) => {
-                let _ = self.audit_log.append(piteka_storage::model::AuditEvent {
-                    occurred_at_unix_seconds: clock.unix_seconds() as i64,
-                    actor: None,
-                    action: "webhook.attempt_not_found".to_string(),
-                    decision: "skipped".to_string(),
-                    detail: format!(
-                        "delivery_id={} deployment_id={} no matching attempt",
-                        delivery_id, event.deployment_id
-                    ),
-                });
+                let _ = self
+                    .audit_log
+                    .append(piteka_storage::model::AuditEvent {
+                        occurred_at_unix_seconds: clock.unix_seconds() as i64,
+                        actor: None,
+                        action: "webhook.attempt_not_found".to_string(),
+                        decision: "skipped".to_string(),
+                        detail: format!(
+                            "delivery_id={} deployment_id={} no matching attempt",
+                            delivery_id, event.deployment_id
+                        ),
+                    })
+                    .await;
                 Ok(())
             }
             Err(err) => {
-                let _ = self.audit_log.append(piteka_storage::model::AuditEvent {
-                    occurred_at_unix_seconds: clock.unix_seconds() as i64,
-                    actor: None,
-                    action: "webhook.receipt_production_error".to_string(),
-                    decision: "error".to_string(),
-                    detail: format!("delivery_id={} error={}", delivery_id, err),
-                });
+                let _ = self
+                    .audit_log
+                    .append(piteka_storage::model::AuditEvent {
+                        occurred_at_unix_seconds: clock.unix_seconds() as i64,
+                        actor: None,
+                        action: "webhook.receipt_production_error".to_string(),
+                        decision: "error".to_string(),
+                        detail: format!("delivery_id={} error={}", delivery_id, err),
+                    })
+                    .await;
                 Ok(())
             }
         }

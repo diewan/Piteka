@@ -14,18 +14,17 @@
 //! # Out-of-order handling
 //!
 //! GitHub does not guarantee strict ordering of webhook deliveries. This
-//! module tracks the received timestamp of each delivery and flags events
-//! that arrive significantly out of order (more than 60 seconds after the
-//! previous delivery for the same event type and resource). Out-of-order
+//! module tracks the provider's event timestamp for each deployment and flags
+//! an event whose provider timestamp precedes the newest event already seen
+//! for that deployment. Out-of-order
 //! events are **not rejected** — they are recorded with an `OutOfOrder`
 //! annotation so downstream handlers can apply their own ordering logic.
 
 use async_trait::async_trait;
-use futures_util::future::TryFutureExt;
-use piteka_ports::github::{GitHubWebhookPayload, GitHubSecretError};
-use piteka_storage::ports::{AuditLog, WebhookReceiptStore};
+use piteka_ports::github::GitHubWebhookPayload;
 use piteka_storage::digest::ContentDigest;
 use piteka_storage::model::WebhookReceipt;
+use piteka_storage::ports::{AuditLog, WebhookReceiptStore};
 
 use crate::webhook_ingestion::error::{WebhookError, WebhookResult};
 
@@ -78,38 +77,22 @@ pub trait WebhookEventProcessor: Send + Sync {
 // Use case
 // ---------------------------------------------------------------------------
 
-/// Configuration for out-of-order detection.
-#[derive(Clone)]
-struct OutOfOrderConfig {
-    /// Maximum allowed gap (seconds) between consecutive deliveries for the
-    /// same event type before flagging as out-of-order.
-    max_gap_seconds: u64,
-}
-
-impl Default for OutOfOrderConfig {
-    fn default() -> Self {
-        Self {
-            max_gap_seconds: 60,
-        }
-    }
-}
-
-/// Tracks the last received timestamp per event type for out-of-order detection.
+/// Tracks the newest provider timestamp per deployment for ordering detection.
 #[derive(Default, Clone)]
 struct LastReceivedTracker {
-    last_received: std::collections::HashMap<String, u64>,
+    latest_event_at: std::collections::HashMap<u64, u64>,
 }
 
 impl LastReceivedTracker {
-    /// Records a delivery timestamp and returns whether the event is out of order.
-    fn record(&mut self, event_type: &str, now: u64) -> bool {
-        let is_out_of_order = if let Some(&last) = self.last_received.get(event_type) {
-            now.saturating_sub(last) > 60
-        } else {
-            false
-        };
-        self.last_received
-            .insert(event_type.to_string(), now);
+    fn record(&mut self, deployment_id: u64, event_at: u64) -> bool {
+        let is_out_of_order = self
+            .latest_event_at
+            .get(&deployment_id)
+            .is_some_and(|latest| event_at < *latest);
+        self.latest_event_at
+            .entry(deployment_id)
+            .and_modify(|latest| *latest = (*latest).max(event_at))
+            .or_insert(event_at);
         is_out_of_order
     }
 }
@@ -125,7 +108,6 @@ where
     processor: P,
     receipt_store: W,
     audit_log: A,
-    out_of_order_config: OutOfOrderConfig,
     tracker: std::sync::Arc<std::sync::Mutex<LastReceivedTracker>>,
 }
 
@@ -140,7 +122,6 @@ where
             processor,
             receipt_store,
             audit_log,
-            out_of_order_config: OutOfOrderConfig::default(),
             tracker: std::sync::Arc::new(std::sync::Mutex::new(LastReceivedTracker::default())),
         }
     }
@@ -195,6 +176,19 @@ where
         payload: &GitHubWebhookPayload,
         clock: &dyn crate::Clock,
     ) -> WebhookResult<IngestionOutcome> {
+        if payload.delivery_id.trim().is_empty() {
+            return Err(WebhookError::Malformed("delivery ID is empty".to_string()));
+        }
+        if payload.event_type != "deployment_status" {
+            return Err(WebhookError::UnsupportedEventType(
+                payload.event_type.clone(),
+            ));
+        }
+        let event =
+            crate::receipt_production::parse_deployment_status(&payload.body).ok_or_else(|| {
+                WebhookError::Malformed("invalid deployment_status payload".to_string())
+            })?;
+
         // Step 1: Record raw payload digest for forensic reconstruction.
         let raw_digest = ContentDigest::of(&payload.body);
 
@@ -216,7 +210,7 @@ where
         let receipt = WebhookReceipt {
             delivery_id: payload.delivery_id.clone(),
             source: "github".to_string(),
-            raw_digest: raw_digest.clone(),
+            raw_digest,
             received_at_unix_seconds: clock.unix_seconds() as i64,
         };
 
@@ -233,9 +227,12 @@ where
             }
         }
 
-        // Step 4: Out-of-order detection.
-        let mut tracker = self.ports.tracker.lock().expect("lock poisoned");
-        let out_of_order = tracker.record(&payload.event_type, clock.unix_seconds());
+        // Step 4: Out-of-order detection based on GitHub's event time, scoped
+        // to the stable deployment ID. Receipt time cannot establish ordering.
+        let out_of_order = {
+            let mut tracker = self.ports.tracker.lock().expect("lock poisoned");
+            tracker.record(event.deployment_id, event.updated_at)
+        };
 
         // Step 5: Audit the ingestion.
         let audit_action = if out_of_order {
@@ -244,16 +241,20 @@ where
             "webhook.ingested"
         };
 
-        self.ports.audit_log.append(piteka_storage::model::AuditEvent {
-            occurred_at_unix_seconds: clock.unix_seconds() as i64,
-            actor: None,
-            action: audit_action.to_string(),
-            decision: "accepted".to_string(),
-            detail: format!(
-                "delivery_id={} event_type={} out_of_order={}",
-                payload.delivery_id, payload.event_type, out_of_order
-            ),
-        }).await.map_err(|err| WebhookError::Storage(err))?;
+        self.ports
+            .audit_log
+            .append(piteka_storage::model::AuditEvent {
+                occurred_at_unix_seconds: clock.unix_seconds() as i64,
+                actor: None,
+                action: audit_action.to_string(),
+                decision: "accepted".to_string(),
+                detail: format!(
+                    "delivery_id={} event_type={} out_of_order={}",
+                    payload.delivery_id, payload.event_type, out_of_order
+                ),
+            })
+            .await
+            .map_err(WebhookError::Storage)?;
 
         Ok(IngestionOutcome::Processed {
             out_of_order,
@@ -278,27 +279,40 @@ where
         out_of_order: bool,
         clock: &dyn crate::Clock,
     ) {
-        match self.ports.processor.process(event_type, payload, delivery_id, out_of_order).await {
+        match self
+            .ports
+            .processor
+            .process(event_type, payload, delivery_id, out_of_order)
+            .await
+        {
             Ok(()) => {
-                let _ = self.ports.audit_log.append(piteka_storage::model::AuditEvent {
-                    occurred_at_unix_seconds: clock.unix_seconds() as i64,
-                    actor: None,
-                    action: "webhook.processed".to_string(),
-                    decision: "success".to_string(),
-                    detail: format!("delivery_id={} event_type={}", delivery_id, event_type),
-                });
+                let _ = self
+                    .ports
+                    .audit_log
+                    .append(piteka_storage::model::AuditEvent {
+                        occurred_at_unix_seconds: clock.unix_seconds() as i64,
+                        actor: None,
+                        action: "webhook.processed".to_string(),
+                        decision: "success".to_string(),
+                        detail: format!("delivery_id={} event_type={}", delivery_id, event_type),
+                    })
+                    .await;
             }
             Err(err) => {
-                let _ = self.ports.audit_log.append(piteka_storage::model::AuditEvent {
-                    occurred_at_unix_seconds: clock.unix_seconds() as i64,
-                    actor: None,
-                    action: "webhook.process_error".to_string(),
-                    decision: "error".to_string(),
-                    detail: format!(
-                        "delivery_id={} event_type={} error={}",
-                        delivery_id, event_type, err
-                    ),
-                });
+                let _ = self
+                    .ports
+                    .audit_log
+                    .append(piteka_storage::model::AuditEvent {
+                        occurred_at_unix_seconds: clock.unix_seconds() as i64,
+                        actor: None,
+                        action: "webhook.process_error".to_string(),
+                        decision: "error".to_string(),
+                        detail: format!(
+                            "delivery_id={} event_type={} error={}",
+                            delivery_id, event_type, err
+                        ),
+                    })
+                    .await;
             }
         }
     }
@@ -334,6 +348,12 @@ impl IngestionOutcome {
     /// Returns `true` if this delivery arrived out of sequence.
     #[must_use]
     pub const fn is_out_of_order(&self) -> bool {
-        matches!(self, Self::Processed { out_of_order: true, .. })
+        matches!(
+            self,
+            Self::Processed {
+                out_of_order: true,
+                ..
+            }
+        )
     }
 }

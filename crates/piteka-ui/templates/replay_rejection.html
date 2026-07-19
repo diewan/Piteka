@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block body %}
+<div class="pk-page-header">
+  <h1>Repeat use rejected</h1>
+  <p role="alert">{{ message }}</p>
+</div>
+
+<section class="pk-card" aria-labelledby="replay-evidence-title">
+  <h2 id="replay-evidence-title">Rejection evidence</h2>
+  <dl>
+    <dt>Reason</dt><dd><code>{{ reason_code }}</code></dd>
+    <dt>Approval</dt><dd><code>{{ mandate_id }}</code></dd>
+    <dt>Attempted by</dt><dd>{{ executor_identity }}</dd>
+    <dt>Approval state</dt><dd>{{ mandate_state }}</dd>
+    <dt>Target dispatch</dt><dd>Not sent</dd>
+  </dl>
+  <p>This rejected repeat use remains in the audit evidence.</p>
+</section>
+{% endblock %}

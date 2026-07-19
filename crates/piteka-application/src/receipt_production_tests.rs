@@ -1,25 +1,17 @@
 //! Tests for receipt production (E-06).
 
+use crate::SystemClock;
 use crate::receipt_production::{
-    DeploymentStatusEvent, ReceiptProducingProcessor,
     map_github_state_to_outcome, parse_deployment_status, produce_receipt_from_webhook,
 };
-use crate::{Clock, SystemClock};
-use piteka_storage::digest::ContentDigest;
 use piteka_storage::memory::{
-    InMemoryActionRequestStore, InMemoryApprovalDecisionStore, InMemoryAuditLog,
-    InMemoryEvidenceNodeStore, InMemoryEvidenceStore, InMemoryExecutionAttemptStore,
-    InMemoryMandateProjectionStore, InMemoryProtocolObjectStore, InMemoryReceiptProjectionStore,
-    InMemoryWebhookReceiptStore,
+    InMemoryAuditLog, InMemoryEvidenceNodeStore, InMemoryExecutionAttemptStore,
+    InMemoryReceiptProjectionStore,
 };
 use piteka_storage::model::{
-    ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, EvidenceNodeRecord,
-    EvidenceSource, ExecutionAttempt, ExecutionAttemptState, ReceiptOutcome, WebhookReceipt,
+    EvidenceSource, ExecutionAttempt, ExecutionAttemptState, ReceiptOutcome,
 };
-use piteka_storage::ports::{
-    ActionRequestStore, ApprovalDecisionStore, AuditLog, EvidenceNodeStore,
-    ExecutionAttemptStore, ProtocolObjectStore, ReceiptProjectionStore, WebhookReceiptStore,
-};
+use piteka_storage::ports::{EvidenceNodeStore, ExecutionAttemptStore, ReceiptProjectionStore};
 
 // ---------------------------------------------------------------------------
 // Helper: create a sample deployment status payload
@@ -27,6 +19,20 @@ use piteka_storage::ports::{
 
 fn sample_deployment_success_payload(deployment_id: u64) -> Vec<u8> {
     format!(r#"{{"status":"completed","state":"success","deployment":{{"id":{}}},"updated_at":1700000000}}"#, deployment_id).into_bytes()
+}
+
+#[test]
+fn parse_deployment_status_accepts_github_rfc3339_timestamp() {
+    let payload =
+        br#"{"state":"success","deployment":{"id":42},"updated_at":"2023-11-14T22:13:20Z"}"#;
+    let event = parse_deployment_status(payload).expect("GitHub timestamp should parse");
+    assert_eq!(event.updated_at, 1_700_000_000);
+}
+
+#[test]
+fn parse_deployment_status_rejects_negative_timestamp() {
+    let payload = br#"{"state":"success","deployment":{"id":42},"updated_at":-1}"#;
+    assert!(parse_deployment_status(payload).is_none());
 }
 
 fn sample_deployment_failure_payload(deployment_id: u64) -> Vec<u8> {
@@ -96,20 +102,35 @@ async fn parse_deployment_status_invalid() {
 
 #[tokio::test]
 async fn map_github_state_to_outcome_success() {
-    assert_eq!(map_github_state_to_outcome("success"), ReceiptOutcome::Succeeded);
+    assert_eq!(
+        map_github_state_to_outcome("success"),
+        ReceiptOutcome::Succeeded
+    );
 }
 
 #[tokio::test]
 async fn map_github_state_to_outcome_failure() {
-    assert_eq!(map_github_state_to_outcome("failure"), ReceiptOutcome::Failed);
+    assert_eq!(
+        map_github_state_to_outcome("failure"),
+        ReceiptOutcome::Failed
+    );
     assert_eq!(map_github_state_to_outcome("error"), ReceiptOutcome::Failed);
 }
 
 #[tokio::test]
 async fn map_github_state_to_outcome_unknown() {
-    assert_eq!(map_github_state_to_outcome("pending"), ReceiptOutcome::Unknown);
-    assert_eq!(map_github_state_to_outcome("inactive"), ReceiptOutcome::Unknown);
-    assert_eq!(map_github_state_to_outcome("queued"), ReceiptOutcome::Unknown);
+    assert_eq!(
+        map_github_state_to_outcome("pending"),
+        ReceiptOutcome::Unknown
+    );
+    assert_eq!(
+        map_github_state_to_outcome("inactive"),
+        ReceiptOutcome::Unknown
+    );
+    assert_eq!(
+        map_github_state_to_outcome("queued"),
+        ReceiptOutcome::Unknown
+    );
 }
 
 #[tokio::test]
@@ -146,7 +167,11 @@ async fn produce_receipt_from_webhook_success() {
     assert!(result.evidence_gaps.is_empty());
 
     // Verify receipt was stored.
-    let stored_receipt = receipt_store.get(&result.receipt_id_hex).await.unwrap().unwrap();
+    let stored_receipt = receipt_store
+        .get(&result.receipt_id_hex)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(stored_receipt.outcome, ReceiptOutcome::Succeeded);
     assert_eq!(stored_receipt.mandate_id_hex, "mand-001");
 
@@ -155,12 +180,17 @@ async fn produce_receipt_from_webhook_success() {
     assert!(!nodes.is_empty());
 
     // Verify source attribution.
-    let observation = nodes.iter().find(|n| {
-        matches!(&n.source, EvidenceSource::Provider(p) if p == "github")
-    });
-    assert!(observation.is_some(), "should have a GitHub observation node");
+    let observation = nodes
+        .iter()
+        .find(|n| matches!(&n.source, EvidenceSource::Provider(p) if p == "github"));
+    assert!(
+        observation.is_some(),
+        "should have a GitHub observation node"
+    );
 
-    let claim = nodes.iter().find(|n| matches!(&n.source, EvidenceSource::Piteka));
+    let claim = nodes
+        .iter()
+        .find(|n| matches!(&n.source, EvidenceSource::Piteka));
     assert!(claim.is_some(), "should have a Piteka claim node");
 }
 
@@ -299,6 +329,10 @@ async fn evidence_nodes_have_source_attribution() {
     // Should have at least one Piteka claim and one GitHub observation.
     assert!(piteka_count >= 1, "should have Piteka claim nodes");
     assert!(github_count >= 1, "should have GitHub observation nodes");
+    assert_eq!(
+        verifier_count, 0,
+        "collection must not invent verifier evidence"
+    );
 }
 
 #[tokio::test]
@@ -327,12 +361,20 @@ async fn receipt_stores_evidence_references() {
     .await
     .unwrap();
 
-    let stored = receipt_store.get(&result.receipt_id_hex).await.unwrap().unwrap();
+    let stored = receipt_store
+        .get(&result.receipt_id_hex)
+        .await
+        .unwrap()
+        .unwrap();
 
     // Receipt should reference the evidence nodes.
     assert!(!stored.dispatch_evidence_refs.is_empty());
     assert!(!stored.target_evidence_refs.is_empty());
 
     // The dispatch_evidence_refs should contain the claim node ID (second element).
-    assert!(stored.dispatch_evidence_refs.contains(&result.evidence_node_ids[1]));
+    assert!(
+        stored
+            .dispatch_evidence_refs
+            .contains(&result.evidence_node_ids[1])
+    );
 }

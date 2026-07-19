@@ -15,23 +15,45 @@ use axum::{
 };
 use tower_service::Service;
 
+#[test]
+fn replay_rejection_is_visible_accessible_and_evidence_backed() {
+    let rejection = piteka_application::dispatch::ReplayRejection {
+        reason_code: "MANDATE.REPLAY_DETECTED",
+        mandate_id_hex: "mandate-1".to_string(),
+        request_id: "request-1".to_string(),
+        executor_identity: "svc:agent".to_string(),
+        mandate_state: "consumed".to_string(),
+        message:
+            "Repeat use rejected. Approval mandate-1 was already used; nothing was sent to GitHub."
+                .to_string(),
+    };
+    let axum::response::Html(body) = crate::render_replay_rejection(&rejection);
+
+    assert!(body.contains("Repeat use rejected"));
+    assert!(body.contains("MANDATE.REPLAY_DETECTED"));
+    assert!(body.contains("Not sent"));
+    assert!(body.contains("role=\"alert\""));
+    assert!(body.contains("Rejection evidence"));
+}
+
 /// Returns a test router with web routes + assets.
 fn test_router() -> Router {
     let ports = piteka_api::TestPorts::new();
     let use_case = ports.use_case();
-    piteka_web::web_router(use_case)
+    crate::web_router(use_case)
 }
 
 fn assets_router() -> Router {
-    piteka_web::assets_router()
+    crate::assets_router()
 }
 
 fn combined_router() -> Router {
     let ports = piteka_api::TestPorts::new();
     let use_case = ports.use_case();
     Router::new()
-        .merge(piteka_web::assets_router())
-        .merge(piteka_web::web_router(use_case))
+        .merge(crate::assets_router())
+        .merge(crate::web_router(use_case.clone()))
+        .merge(piteka_api::routes::build_full_router(use_case))
 }
 
 // ── Positive tests: pages are served ───────────────────────────────────────
@@ -337,7 +359,22 @@ async fn step_up_overlay_is_accessible() {
 
 #[tokio::test]
 async fn status_chips_use_icon_plus_label_not_color_only() {
-    let mut app = test_router();
+    let mut app = combined_router();
+
+    let create = Request::builder()
+        .method("POST")
+        .uri("/api/v1/action-requests")
+        .header("content-type", "application/json")
+        .header("X-Tenant-Id", "demo")
+        .body(Body::from(
+            serde_json::json!({
+                "requested_by": "agent@example.com",
+                "intent_id": "intent-status-test"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    assert_eq!(app.call(create).await.unwrap().status(), StatusCode::CREATED);
 
     let request = Request::builder()
         .method("GET")
