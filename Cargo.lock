@@ -650,6 +650,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "csv-accountability-verify"
+version = "0.1.5"
+dependencies = [
+ "csv-accountability",
+]
+
+[[package]]
 name = "csv-algebra"
 version = "0.1.5"
 
@@ -748,7 +755,11 @@ name = "csv-sdk"
 version = "0.1.5"
 dependencies = [
  "csv-accountability",
+ "csv-accountability-verify",
  "csv-wire",
+ "hex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

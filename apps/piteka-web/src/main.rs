@@ -5,7 +5,7 @@
 //! Serves the HTML approval interface alongside the REST API.
 //! Implements Master Plan §59 D-08.
 
-use axum::{Router, routing::get};
+use axum::Router;
 use piteka_api::TestPorts;
 
 #[tokio::main]
@@ -25,8 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .merge(assets_router)
         .merge(web_router)
-        .merge(api_router)
-        .route("/health", get(|| async { "ready" }));
+        .merge(api_router);
 
     let address = std::net::SocketAddr::from(([127, 0, 0, 1], 3000));
     eprintln!("Piteka web approval UI listening on http://{}", address);
