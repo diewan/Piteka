@@ -1,7 +1,8 @@
 /* Piteka Design System — "Ledger" skin
  *
  * Implements the Design System & Language Layer §2.2 tokens and §5 components.
- * All pairs meet WCAG AA contrast ratios (4.5:1 body text, 3:1 large text/UI).
+ * Checked pairings and thresholds live in wcag-aa-contrast-matrix.csv and are
+ * enforced by the piteka-web test suite.
  *
  * Authority: DIEWAN_DESIGN_SYSTEM_AND_LANGUAGE.md
  */
@@ -17,18 +18,17 @@
   /* Ink */
   --ink-1: #1C2430;
   --ink-2: #4A5462;
-  --ink-3: #7C8592;
+  --ink-3: #5F6875;
 
   /* Rules & borders */
-  --rule: #D8DCD6;
+  --rule: #89919B;
 
   /* Interaction */
   --interactive: #2C4C8A;
   --interactive-hover: #1E3A6E;
   --focus-ring: #2C4C8A;
 
-  /* Seal — sealing wax. ONLY on: Approve & sign, signature badges,
-     revocation confirmations. Never decorative. */
+  /* Seal — sealing wax. Reserved for signatures and destructive confirmation. */
   --seal: #8C2F39;
   --seal-hover: #6E252E;
 
@@ -36,10 +36,10 @@
   --status-met: #1E7F5C;
   --status-not-met: #B3362B;
   --status-indeterminate: #5B5E8C;
-  --status-not-applicable: #8A8F98;
-  --status-attention: #A66A00;
+  --status-not-applicable: #626973;
+  --status-attention: #855500;
   --status-quarantine: #5B5E8C;
-  --status-gap: #8A8F98;
+  --status-gap: #626973;
 
   /* Spacing rhythm (8/12/16/24) */
   --space-xs: 4px;
@@ -318,7 +318,7 @@ a:hover {
   border-color: var(--interactive-hover);
 }
 
-/* Seal — APPROVE & SIGN only */
+/* Seal — signatures and destructive confirmation only. */
 .pk-btn-seal {
   background: var(--seal);
   color: #FFFFFF;
@@ -588,6 +588,18 @@ a:hover {
 .pk-intent-field-value .pk-hash-field {
   font-size: 0.8125rem;
 }
+
+.pk-deployment-controls {
+  margin-top: var(--space-md);
+  padding: var(--space-md);
+  border: 1px solid var(--rule);
+  color: var(--ink-1);
+}
+
+.pk-deployment-controls:disabled { opacity: 1; }
+.pk-deployment-controls legend { padding: 0 var(--space-xs); font-weight: 600; }
+.pk-deployment-controls dl { display: grid; grid-template-columns: 180px 1fr; gap: var(--space-xs) var(--space-md); }
+.pk-deployment-controls dt { color: var(--ink-2); }
 
 /* ── StateTimeline ───────────────────────────────────────────────────────── */
 

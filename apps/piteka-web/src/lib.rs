@@ -11,9 +11,9 @@
 //! | S2 | Request detail / Approval panel | `/request/:id` |
 //! | S3 | Executions & outcomes | `/executions` |
 //! | S4 | Action Journey | (from S2) |
-//! | S5 | Case file export | `/case-files` |
+//! | S5 | Case file export | `/case-files` (deep link from an action) |
 //! | S7 | Verification report | `/verification` |
-//! | S6 | Settings | `/settings` |
+//! | S6 | Integration | `/settings` (security operator only) |
 //!
 //! The design system (CSS tokens, components) lives in `piteka-ui`.
 
@@ -78,11 +78,28 @@ pub fn assets_router() -> Router {
 
 /// Formats a Unix timestamp as a human-readable string.
 fn format_timestamp(unix_secs: u64) -> (String, String) {
-    // Simple formatting: use the raw value for ISO, a readable form for display.
-    // In production, use a proper datetime crate.
-    let iso = "1970-01-01T00:00:00Z".to_string(); // Placeholder — would use chrono in production
-    let human = format!("{}s", unix_secs);
-    (human, iso)
+    // Howard Hinnant's civil-from-days conversion. Keeping this small formatter
+    // local avoids a second time interpretation: stored Unix seconds are always
+    // rendered as an absolute UTC instant.
+    let seconds = i64::try_from(unix_secs).unwrap_or(i64::MAX);
+    let days = seconds.div_euclid(86_400);
+    let day_seconds = seconds.rem_euclid(86_400);
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 }.div_euclid(146_097);
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    let hour = day_seconds / 3_600;
+    let minute = day_seconds % 3_600 / 60;
+    let second = day_seconds % 60;
+    let iso = format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z");
+    (iso.clone(), iso)
 }
 
 /// Truncates a hash for display: first 6 + "…" + last 4.

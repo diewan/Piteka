@@ -413,6 +413,25 @@ where
         payload_commitment: &str,
         attempt_digest: [u8; 32],
     ) -> Result<DeploymentCreated, GitHubAppError> {
+        // The adapter is the credential boundary. Caller-controlled provider
+        // identifiers must not select a different target while reusing this
+        // adapter's configured credential.
+        if installation_id != &self.context.installation_id {
+            return Err(GitHubAppError::Unauthorized(
+                "installation does not match the configured GitHub App context".to_string(),
+            ));
+        }
+        if repository_id != &self.context.repository_id {
+            return Err(GitHubAppError::Unauthorized(
+                "repository does not match the configured GitHub App context".to_string(),
+            ));
+        }
+        if environment != &self.context.environment_name {
+            return Err(GitHubAppError::Unauthorized(
+                "environment does not match the configured GitHub App context".to_string(),
+            ));
+        }
+
         // Validate inputs — fail closed on empty values
         if commit_sha.is_empty() || commit_sha.len() != 40 {
             return Err(GitHubAppError::EmptyField("commit_sha"));
@@ -780,6 +799,93 @@ mod tests {
         assert!(deployment.url.contains("demo-repo"));
     }
 
+    #[tokio::test]
+    async fn create_deployment_rejects_provider_context_mismatch_before_secret_use() {
+        let adapter = make_test_adapter();
+        let cases = [
+            (
+                GitHubInstallationId::new("99999").unwrap(),
+                GitHubRepositoryId::new("67890").unwrap(),
+                GitHubEnvironmentName::new("production").unwrap(),
+                "installation",
+            ),
+            (
+                GitHubInstallationId::new("12345").unwrap(),
+                GitHubRepositoryId::new("99999").unwrap(),
+                GitHubEnvironmentName::new("production").unwrap(),
+                "repository",
+            ),
+            (
+                GitHubInstallationId::new("12345").unwrap(),
+                GitHubRepositoryId::new("67890").unwrap(),
+                GitHubEnvironmentName::new("staging").unwrap(),
+                "environment",
+            ),
+        ];
+
+        for (installation, repository, environment, field) in cases {
+            let error = adapter
+                .create_deployment(
+                    &installation,
+                    &repository,
+                    "abcdef0123456789abcdef0123456789abcdef01",
+                    &environment,
+                    false,
+                    "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                    [0u8; 32],
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&error, GitHubAppError::Unauthorized(message) if message.contains(field)),
+                "expected {field} mismatch, got {error}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn secret_resolution_failures_do_not_expose_resolved_secret_bytes() {
+        let raw_secret = "raw-private-key-must-not-appear";
+        let mut resolver = InMemorySecretResolver::new();
+        resolver.store_app_secret("empty-key", Vec::new());
+        resolver.store_webhook_secret("webhook-ref", raw_secret.as_bytes().to_vec());
+        let context = GitHubInstallationContext::new(
+            "12345",
+            "67890",
+            "demo-org/demo-repo",
+            "111",
+            "production",
+        )
+        .unwrap();
+        let adapter = GitHubAppAdapter::new(
+            resolver,
+            context,
+            "empty-key",
+            "webhook-ref",
+            OrganizationId::new("diewan-demo").unwrap(),
+        )
+        .unwrap();
+
+        let error = adapter
+            .create_deployment(
+                &GitHubInstallationId::new("12345").unwrap(),
+                &GitHubRepositoryId::new("67890").unwrap(),
+                "abcdef0123456789abcdef0123456789abcdef01",
+                &GitHubEnvironmentName::new("production").unwrap(),
+                false,
+                "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                [0u8; 32],
+            )
+            .await
+            .unwrap_err();
+        let rendered = format!("{error:?} {error}");
+        assert!(!rendered.contains(raw_secret));
+        assert!(matches!(
+            error,
+            GitHubAppError::SecretResolution(GitHubSecretError::EmptySecret)
+        ));
+    }
+
     #[test]
     fn deployment_payload_binds_exact_sha_and_attempt_digest() {
         let digest = [0xabu8; 32];
@@ -807,8 +913,8 @@ mod tests {
         let adapter = make_test_adapter();
         let result = adapter
             .create_deployment(
-                &GitHubInstallationId::new("123").unwrap(),
-                &GitHubRepositoryId::new("456").unwrap(),
+                &GitHubInstallationId::new("12345").unwrap(),
+                &GitHubRepositoryId::new("67890").unwrap(),
                 "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
                 &GitHubEnvironmentName::new("production").unwrap(),
                 false,

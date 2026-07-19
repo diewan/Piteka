@@ -374,7 +374,10 @@ async fn status_chips_use_icon_plus_label_not_color_only() {
             .to_string(),
         ))
         .unwrap();
-    assert_eq!(app.call(create).await.unwrap().status(), StatusCode::CREATED);
+    assert_eq!(
+        app.call(create).await.unwrap().status(),
+        StatusCode::CREATED
+    );
 
     let request = Request::builder()
         .method("GET")
@@ -513,18 +516,85 @@ async fn css_contrast_ratios_meet_wcag_aa() {
     )
     .unwrap();
 
-    // Verify the actual color values are present
-    // WCAG AA requires 4.5:1 for body text, 3:1 for large text and UI components
-    // --ink-1 (#1C2430) on --surface-0 (#F6F7F5) = ~15:1 ✓
-    // --ink-2 (#4A5462) on --surface-0 (#F6F7F5) = ~7:1 ✓
-    // --interactive (#2C4C8A) on --surface-1 (#FFFFFF) = ~6.5:1 ✓
-    // --seal (#8C2F39) on --surface-1 (#FFFFFF) = ~6:1 ✓
+    fn channel(value: u8) -> f64 {
+        let value = f64::from(value) / 255.0;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    fn luminance(hex: &str) -> f64 {
+        let value = u32::from_str_radix(hex.trim_start_matches('#'), 16).unwrap();
+        0.2126 * channel((value >> 16) as u8)
+            + 0.7152 * channel((value >> 8) as u8)
+            + 0.0722 * channel(value as u8)
+    }
+    fn ratio(left: &str, right: &str) -> f64 {
+        let (a, b) = (luminance(left), luminance(right));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
 
-    assert!(body.contains("--ink-1: #1C2430"));
-    assert!(body.contains("--surface-0: #F6F7F5"));
-    assert!(body.contains("--ink-2: #4A5462"));
-    assert!(body.contains("--interactive: #2C4C8A"));
-    assert!(body.contains("--seal: #8C2F39"));
+    let matrix = include_str!("../wcag-aa-contrast-matrix.csv");
+    for row in matrix.lines().skip(1) {
+        let columns: Vec<_> = row.split(',').collect();
+        let minimum: f64 = columns[3].parse().unwrap();
+        let actual = ratio(columns[0], columns[1]);
+        assert!(
+            actual >= minimum,
+            "{} on {} for {} is {actual:.2}:1, below {minimum}:1",
+            columns[0],
+            columns[1],
+            columns[2]
+        );
+        assert!(
+            body.contains(columns[0]),
+            "matrix color {} is absent from CSS",
+            columns[0]
+        );
+    }
+}
+
+#[test]
+fn unix_timestamps_render_as_absolute_utc() {
+    assert_eq!(
+        crate::format_timestamp(0),
+        ("1970-01-01T00:00:00Z".into(), "1970-01-01T00:00:00Z".into())
+    );
+    assert_eq!(
+        crate::format_timestamp(1_704_067_200),
+        ("2024-01-01T00:00:00Z".into(), "2024-01-01T00:00:00Z".into())
+    );
+}
+
+#[test]
+fn rev03_templates_keep_deep_links_out_of_demo_navigation() {
+    let base = include_str!("../../../crates/piteka-ui/templates/base.html");
+    assert!(!base.contains(">Case files</a>"));
+    assert!(!base.contains(">Settings</a>"));
+    assert!(base.contains(">Integration</a>"));
+    assert!(base.contains(">Confirm identity</h2>"));
+}
+
+#[test]
+fn rev03_approval_and_quarantine_language_is_fixed() {
+    let detail = include_str!("../../../crates/piteka-ui/templates/request_detail.html");
+    assert!(detail.contains("Approve deployment"));
+    assert!(detail.contains("pk-btn-primary"));
+    assert!(!detail.contains("Approve &amp; sign"));
+    assert!(detail.contains("This approval cannot be retried"));
+    assert!(detail.contains("closed unresolved and remain unusable"));
+    assert!(detail.contains("Deployment controls"));
+    assert!(detail.contains("Piteka-controlled"));
+}
+
+#[test]
+fn rev03_integration_surfaces_single_approval_and_consumer() {
+    let integration = include_str!("../../../crates/piteka-ui/templates/settings.html");
+    assert!(integration.contains("Approval layers"));
+    assert!(integration.contains("Configuration incompatible with demo profile"));
+    assert!(integration.contains("Deployment consumer"));
+    assert!(integration.contains("original deployment ID"));
 }
 
 // ── Negative tests ────────────────────────────────────────────────────────

@@ -2,12 +2,28 @@
 
 {% block body %}
 <div class="pk-page-header">
-  <h1>Settings</h1>
-  <p>Integration and configuration.</p>
+  <h1>Integration</h1>
+  <p>GitHub deployment configuration for security operators.</p>
 </div>
 
-<div class="pk-empty-state">
-  <p>Integration settings are configured through the security operator dashboard.</p>
-</div>
+<section class="pk-card pk-mb-lg" aria-labelledby="approval-layers-title">
+  <h2 id="approval-layers-title">Approval layers</h2>
+  <dl>
+    <dt>Piteka approval</dt><dd>Required</dd>
+    <dt>Native GitHub approval</dt><dd>Disabled</dd>
+    <dt>Profile health</dt><dd>Configuration compatible with demo profile</dd>
+  </dl>
+  <p>A live native GitHub approval rule changes health to “Configuration incompatible with demo profile” and blocks execution.</p>
+</section>
+
+<section class="pk-card" aria-labelledby="consumer-title">
+  <h2 id="consumer-title">Deployment consumer</h2>
+  <dl>
+    <dt>Workflow</dt><dd>Version-pinned workflow and fingerprint required</dd>
+    <dt>Health</dt><dd>Enabled</dd>
+    <dt>Status reporting</dt><dd>Reports against the original deployment ID</dd>
+    <dt>Environment protection snapshot</dt><dd>Recorded as evidence</dd>
+  </dl>
+</section>
 
 {% endblock %}

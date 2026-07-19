@@ -1,0 +1,13 @@
+foreground,background,usage,minimum_ratio
+#1C2430,#F6F7F5,primary body text,4.5
+#4A5462,#F6F7F5,secondary body text,4.5
+#5F6875,#F6F7F5,tertiary body text,4.5
+#2C4C8A,#FFFFFF,interactive text,4.5
+#1E3A6E,#FFFFFF,interactive hover text,4.5
+#8C2F39,#FFFFFF,signature and destructive text,4.5
+#1E7F5C,#FFFFFF,requirement met text,4.5
+#B3362B,#FFFFFF,requirement not met text,4.5
+#5B5E8C,#FFFFFF,indeterminate text,4.5
+#626973,#FFFFFF,not applicable and gap text,4.5
+#855500,#FFFFFF,attention text,4.5
+#89919B,#FFFFFF,component boundaries,3.0

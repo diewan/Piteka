@@ -16,10 +16,9 @@
       <ul class="pk-sidebar-nav">
         <li><a href="/work-queue" {% if current_page == "work-queue" %}aria-current="page"{% endif %}>Work queue</a></li>
         <li><a href="/executions" {% if current_page == "executions" %}aria-current="page"{% endif %}>Executions</a></li>
-        <li><a href="/case-files" {% if current_page == "case-files" %}aria-current="page"{% endif %}>Case files</a></li>
         <li><a href="/verification" {% if current_page == "verification" %}aria-current="page"{% endif %}>Verification</a></li>
         <hr class="pk-sidebar-divider">
-        <li><a href="/settings" {% if current_page == "settings" %}aria-current="page"{% endif %}>Settings</a></li>
+        <li><a href="/settings" {% if current_page == "settings" %}aria-current="page"{% endif %}>Integration</a></li>
       </ul>
     </aside>
 
@@ -31,8 +30,8 @@
   <!-- Step-up overlay (OV1) -->
   <div class="pk-overlay" id="stepup-overlay" role="dialog" aria-modal="true" aria-labelledby="stepup-title">
     <div class="pk-modal">
-      <h2 id="stepup-title">Re-authentication required</h2>
-      <p id="stepup-message">Approving an action requires step-up authentication. Enter your credentials to sign the approval.</p>
+      <h2 id="stepup-title">Confirm identity</h2>
+      <p id="stepup-message">Confirm your identity before recording this decision.</p>
       <form id="stepup-form" method="post" action="/api/v1/session/reauth">
         <div class="pk-mb-md">
           <label for="stepup-password" class="pk-text-sm" style="display:block;margin-bottom:4px;color:var(--ink-2);">Password</label>
@@ -41,7 +40,7 @@
         </div>
         <div class="pk-modal-actions">
           <button type="button" class="pk-btn pk-btn-secondary" id="stepup-cancel">Cancel</button>
-          <button type="submit" class="pk-btn pk-btn-seal">Confirm &amp; sign</button>
+          <button type="submit" class="pk-btn pk-btn-primary">Confirm identity</button>
         </div>
       </form>
     </div>
@@ -80,6 +79,12 @@
         if (e.key === 'Escape' && overlay.classList.contains('pk-overlay--visible')) {
           window.pkCloseStepUp();
         }
+      });
+
+      document.querySelectorAll('time[data-local-time]').forEach(function(time) {
+        var local = new Date(time.dateTime).toLocaleString();
+        time.title = 'Local time: ' + local;
+        time.setAttribute('aria-label', time.textContent + '; local time: ' + local);
       });
 
       // Toast notification

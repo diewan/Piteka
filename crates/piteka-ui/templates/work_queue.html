@@ -34,7 +34,7 @@
           </span>
         </td>
         <td>
-          <time datetime="{{ req.created_at_iso }}">{{ req.created_at_human }}</time>
+          <time datetime="{{ req.created_at_iso }}" data-local-time tabindex="0">{{ req.created_at_human }}</time>
         </td>
       </tr>
       {% endfor %}

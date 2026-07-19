@@ -12,13 +12,9 @@ use axum::{
 use piteka_api::TestPorts;
 use piteka_application::ActionRequestUseCase;
 use piteka_storage::ActionRequestStatus;
-use piteka_ui::{
-    DecisionRow, IntentPanelData, RequestDetailRow, WorkQueueRow,
-};
+use piteka_ui::{DecisionRow, IntentPanelData, RequestDetailRow, WorkQueueRow};
 
-use crate::{
-    format_timestamp, status_for_decision, status_for_request,
-};
+use crate::{format_timestamp, status_for_decision, status_for_request};
 
 mod filters {
     pub use crate::{first_char, truncate_hash};

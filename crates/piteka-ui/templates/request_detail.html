@@ -55,6 +55,17 @@
       <span class="pk-intent-field-label">Task</span>
       <span class="pk-intent-field-value">{{ intent.task }}</span>
     </div>
+    <fieldset class="pk-deployment-controls" disabled>
+      <legend>Deployment controls</legend>
+      <dl>
+        <dt>Commit checks</dt><dd>All submitted checks</dd>
+        <dt>Automatic merge</dt><dd>Off</dd>
+        <dt>Deployment task</dt><dd>{{ intent.task }}</dd>
+        <dt>Environment type</dt><dd>Production</dd>
+        <dt>Correlation payload</dt><dd>Piteka-controlled</dd>
+        <dt>Gate-policy fingerprint</dt><dd><code>{{ intent.digest|truncate_hash }}</code></dd>
+      </dl>
+    </fieldset>
     <div class="pk-intent-field">
       <span class="pk-intent-field-label">Expiry</span>
       <span class="pk-intent-field-value">
@@ -71,7 +82,7 @@
     <div class="pk-intent-field">
       <span class="pk-intent-field-label">Intent fingerprint</span>
       <span class="pk-intent-field-value">
-        <span class="pk-hash-field" tabindex="0" role="button" aria-label="Copy intent digest {{ intent.digest }}">
+        <span class="pk-hash-field" tabindex="0" role="button" aria-label="Copy intent fingerprint {{ intent.digest }}">
           {{ intent.digest|truncate_hash }}
           <span class="hash-tooltip">{{ intent.digest }}</span>
         </span>
@@ -80,7 +91,7 @@
     <div class="pk-intent-field">
       <span class="pk-intent-field-label">Requested at</span>
       <span class="pk-intent-field-value">
-        <time datetime="{{ request.created_at_iso }}">{{ request.created_at_human }}</time>
+        <time datetime="{{ request.created_at_iso }}" data-local-time tabindex="0">{{ request.created_at_human }}</time>
       </span>
     </div>
   </div>
@@ -133,7 +144,7 @@
           </span>
         </td>
         <td>
-          <time datetime="{{ dec.decided_at_iso }}">{{ dec.decided_at_human }}</time>
+          <time datetime="{{ dec.decided_at_iso }}" data-local-time tabindex="0">{{ dec.decided_at_human }}</time>
         </td>
       </tr>
       {% endfor %}
@@ -146,17 +157,18 @@
 {% if request.status == "Quarantined" %}
 <div class="pk-quarantine-banner" role="alert">
   <div class="pk-quarantine-banner-title">Outcome under review</div>
-  We can't yet confirm whether the action happened. No retry will occur until this is resolved.
+  We cannot confirm whether GitHub accepted this deployment. This approval cannot be retried.
+  <p>Review may confirm that it was accepted. If confirmation remains impossible, this approval will be closed unresolved and remain unusable.</p>
 </div>
 {% endif %}
 
 <!-- Approval action bar — only shown for Pending requests -->
 {% if request.status == "Pending" %}
 <div class="pk-approval-actions" role="region" aria-label="Approval actions">
-  <button type="button" class="pk-btn pk-btn-seal"
-          onclick="pkOpenStepUp('Approving this action creates a single-use signed approval. This cannot be undone.')"
-          aria-label="Approve and sign request {{ request.id }}">
-    Approve &amp; sign
+  <button type="button" class="pk-btn pk-btn-primary"
+          onclick="pkOpenStepUp('Confirm your identity before recording this deployment approval.')"
+          aria-label="Approve deployment request {{ request.id }}">
+    Approve deployment
   </button>
   <form method="post" action="/api/v1/action-requests/{{ request.id }}/reject" style="display:inline;">
     <button type="submit" class="pk-btn pk-btn-destructive"
@@ -166,7 +178,7 @@
   </form>
   <div class="pk-actions-spacer"></div>
   <div class="pk-reauth-note">
-    Approve &amp; sign requires step-up authentication. Your approval creates a signed, single-use authorization.
+    Confirm identity is required. Your decision is recorded separately from the mandate issued and signed by Piteka.
   </div>
 </div>
 {% endif %}
