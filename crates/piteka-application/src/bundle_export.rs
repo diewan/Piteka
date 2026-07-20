@@ -189,6 +189,37 @@ where
     })
 }
 
+/// Assembles the portable evidence-export **manifest bytes** for a receipt
+/// without storing evidence blobs.
+///
+/// These bytes are the exact JSON payload that Piteka signs into its evidence
+/// feed and that Tuppira's `PitekaEvidenceFeedConnector` deserializes as an
+/// `ExportManifest` (`bundle_version` `"0.1"`). Keeping this side-effect free
+/// lets the feed producer publish observations from already-captured evidence.
+pub async fn export_manifest_bytes<R, E>(
+    receipt_store: &R,
+    evidence_store: &E,
+    receipt_id_hex: &str,
+) -> Result<Vec<u8>, BundleExportError>
+where
+    R: ReceiptProjectionStore,
+    E: EvidenceNodeStore,
+{
+    let receipt = receipt_store
+        .get(receipt_id_hex)
+        .await?
+        .ok_or_else(|| BundleExportError::ReceiptNotFound(receipt_id_hex.to_string()))?;
+
+    let dispatch_nodes = fetch_nodes(evidence_store, &receipt.dispatch_evidence_refs).await?;
+    let target_nodes = fetch_nodes(evidence_store, &receipt.target_evidence_refs).await?;
+    let gap_nodes = fetch_nodes(evidence_store, &receipt.evidence_gaps).await?;
+
+    let manifest = assemble_manifest(&receipt, &dispatch_nodes, &target_nodes, &gap_nodes)?;
+    serde_json::to_vec(&manifest).map_err(|e| {
+        BundleExportError::Serialization(format!("failed to serialize manifest: {e}"))
+    })
+}
+
 /// Fetches evidence nodes by their IDs.
 async fn fetch_nodes<E: EvidenceNodeStore>(
     store: &E,

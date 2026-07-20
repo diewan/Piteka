@@ -1904,6 +1904,7 @@ name = "piteka"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "ed25519-dalek",
  "hex",
  "piteka-api",
  "piteka-application",
@@ -1912,6 +1913,7 @@ dependencies = [
  "piteka-infra",
  "piteka-ports",
  "piteka-storage",
+ "serde",
  "serde_json",
  "sha2",
  "tokio",
