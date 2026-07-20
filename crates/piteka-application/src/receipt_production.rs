@@ -101,19 +101,22 @@ pub fn parse_deployment_status(payload: &[u8]) -> Option<DeploymentStatusEvent> 
     let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
 
     let deployment_id = value.get("deployment")?.get("id")?.as_u64()?;
-    let state = value.get("state")?.as_str()?.to_string();
-    let description = value
+    // GitHub's live webhook schema nests these fields under
+    // `deployment_status`. Retained fixtures used the status object itself.
+    let status = value.get("deployment_status").unwrap_or(&value);
+    let state = status.get("state")?.as_str()?.to_string();
+    let description = status
         .get("description")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let target_url = value
+    let target_url = status
         .get("target_url")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
     // GitHub's API uses an ISO-8601 string. Numeric timestamps remain accepted
     // for retained fixtures, but negative values must never wrap into the
     // distant future.
-    let updated_at_value = value.get("updated_at")?;
+    let updated_at_value = status.get("updated_at")?;
     let updated_at = if let Some(value) = updated_at_value.as_u64() {
         value
     } else if let Some(value) = updated_at_value.as_i64() {
@@ -497,6 +500,26 @@ where
         let event = parse_deployment_status(payload).ok_or_else(|| {
             WebhookError::Malformed("invalid deployment_status payload".to_string())
         })?;
+
+        // Provider progress is evidence of activity, not an execution outcome.
+        // Preserve ingestion/audit records but defer the immutable receipt
+        // until GitHub reports one terminal state.
+        if !matches!(event.state.as_str(), "success" | "failure" | "error") {
+            self.audit_log
+                .append(piteka_storage::model::AuditEvent {
+                    occurred_at_unix_seconds: crate::SystemClock.unix_seconds() as i64,
+                    actor: None,
+                    action: "webhook.status_non_terminal".to_string(),
+                    decision: "deferred".to_string(),
+                    detail: format!(
+                        "delivery_id={delivery_id} deployment_id={} state={}",
+                        event.deployment_id, event.state
+                    ),
+                })
+                .await
+                .map_err(WebhookError::Storage)?;
+            return Ok(());
+        }
 
         let clock = crate::SystemClock;
 

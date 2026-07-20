@@ -1904,10 +1904,16 @@ name = "piteka"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "hex",
  "piteka-api",
  "piteka-application",
  "piteka-domain",
+ "piteka-github",
  "piteka-infra",
+ "piteka-ports",
+ "piteka-storage",
+ "serde_json",
+ "sha2",
  "tokio",
 ]
 
@@ -1974,6 +1980,7 @@ dependencies = [
  "piteka-ports",
  "pkcs8",
  "rand 0.8.7",
+ "reqwest",
  "rsa",
  "serde",
  "serde_json",

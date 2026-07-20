@@ -174,8 +174,14 @@ async fn local_evidence_store_survives_backup_and_restore() {
     copy_tree(source.path(), restore.path()).unwrap();
     let restored = LocalEvidenceStore::open(restore.path()).unwrap();
 
-    assert_eq!(restored.get(&a).await.unwrap().unwrap(), b"artifact-a".to_vec());
-    assert_eq!(restored.get(&b).await.unwrap().unwrap(), b"artifact-b".to_vec());
+    assert_eq!(
+        restored.get(&a).await.unwrap().unwrap(),
+        b"artifact-a".to_vec()
+    );
+    assert_eq!(
+        restored.get(&b).await.unwrap().unwrap(),
+        b"artifact-b".to_vec()
+    );
 }
 
 fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
@@ -269,11 +275,11 @@ async fn execution_attempts_queryable_by_mandate() {
 #[tokio::test]
 async fn execution_attempts_queryable_by_deployment_id() {
     let store = InMemoryExecutionAttemptStore::default();
-    
+
     let mut attempt1 = make_attempt("att-1", "m1");
     attempt1.github_deployment_id = Some(12345);
     store.insert(attempt1).await.unwrap();
-    
+
     store.insert(make_attempt("att-2", "m1")).await.unwrap();
     store.insert(make_attempt("att-3", "m2")).await.unwrap();
 
@@ -289,36 +295,38 @@ async fn execution_attempts_queryable_by_deployment_id() {
 async fn receipt_projections_are_append_only() {
     let store = InMemoryReceiptProjectionStore::default();
 
-    store.insert(ReceiptProjection {
-        receipt_id_hex: "rcpt-1".to_string(),
-        mandate_id_hex: "m1".to_string(),
-        intent_id_hex: "intent-abc123".to_string(),
-        attempt_id_hex: "att-1".to_string(),
-        outcome: ReceiptOutcome::Succeeded,
-        created_at_unix_seconds: 2_000,
-        dispatch_evidence_refs: vec![],
-        target_evidence_refs: vec![],
-        evidence_gaps: vec![],
-        canonical_bytes: None,
-    })
-    .await
-    .unwrap();
+    store
+        .insert(ReceiptProjection {
+            receipt_id_hex: "rcpt-1".to_string(),
+            mandate_id_hex: "m1".to_string(),
+            intent_id_hex: "intent-abc123".to_string(),
+            attempt_id_hex: "att-1".to_string(),
+            outcome: ReceiptOutcome::Succeeded,
+            created_at_unix_seconds: 2_000,
+            dispatch_evidence_refs: vec![],
+            target_evidence_refs: vec![],
+            evidence_gaps: vec![],
+            canonical_bytes: None,
+        })
+        .await
+        .unwrap();
 
     // Duplicate id is rejected.
-    let err = store.insert(ReceiptProjection {
-        receipt_id_hex: "rcpt-1".to_string(),
-        mandate_id_hex: "m1".to_string(),
-        intent_id_hex: "intent-abc123".to_string(),
-        attempt_id_hex: "att-1".to_string(),
-        outcome: ReceiptOutcome::Failed,
-        created_at_unix_seconds: 2_001,
-        dispatch_evidence_refs: vec![],
-        target_evidence_refs: vec![],
-        evidence_gaps: vec![],
-        canonical_bytes: None,
-    })
-    .await
-    .unwrap_err();
+    let err = store
+        .insert(ReceiptProjection {
+            receipt_id_hex: "rcpt-1".to_string(),
+            mandate_id_hex: "m1".to_string(),
+            intent_id_hex: "intent-abc123".to_string(),
+            attempt_id_hex: "att-1".to_string(),
+            outcome: ReceiptOutcome::Failed,
+            created_at_unix_seconds: 2_001,
+            dispatch_evidence_refs: vec![],
+            target_evidence_refs: vec![],
+            evidence_gaps: vec![],
+            canonical_bytes: None,
+        })
+        .await
+        .unwrap_err();
     assert!(err.to_string().contains("already exists"));
 }
 
@@ -326,35 +334,37 @@ async fn receipt_projections_are_append_only() {
 async fn receipts_queryable_by_mandate() {
     let store = InMemoryReceiptProjectionStore::default();
 
-    store.insert(ReceiptProjection {
-        receipt_id_hex: "rcpt-1".to_string(),
-        mandate_id_hex: "m1".to_string(),
-        intent_id_hex: "intent-abc123".to_string(),
-        attempt_id_hex: "att-1".to_string(),
-        outcome: ReceiptOutcome::Succeeded,
-        created_at_unix_seconds: 2_000,
-        dispatch_evidence_refs: vec![],
-        target_evidence_refs: vec![],
-        evidence_gaps: vec![],
-        canonical_bytes: None,
-    })
-    .await
-    .unwrap();
+    store
+        .insert(ReceiptProjection {
+            receipt_id_hex: "rcpt-1".to_string(),
+            mandate_id_hex: "m1".to_string(),
+            intent_id_hex: "intent-abc123".to_string(),
+            attempt_id_hex: "att-1".to_string(),
+            outcome: ReceiptOutcome::Succeeded,
+            created_at_unix_seconds: 2_000,
+            dispatch_evidence_refs: vec![],
+            target_evidence_refs: vec![],
+            evidence_gaps: vec![],
+            canonical_bytes: None,
+        })
+        .await
+        .unwrap();
 
-    store.insert(ReceiptProjection {
-        receipt_id_hex: "rcpt-2".to_string(),
-        mandate_id_hex: "m1".to_string(),
-        intent_id_hex: "intent-abc123".to_string(),
-        attempt_id_hex: "att-2".to_string(),
-        outcome: ReceiptOutcome::Unknown,
-        created_at_unix_seconds: 2_001,
-        dispatch_evidence_refs: vec![],
-        target_evidence_refs: vec![],
-        evidence_gaps: vec![],
-        canonical_bytes: None,
-    })
-    .await
-    .unwrap();
+    store
+        .insert(ReceiptProjection {
+            receipt_id_hex: "rcpt-2".to_string(),
+            mandate_id_hex: "m1".to_string(),
+            intent_id_hex: "intent-abc123".to_string(),
+            attempt_id_hex: "att-2".to_string(),
+            outcome: ReceiptOutcome::Unknown,
+            created_at_unix_seconds: 2_001,
+            dispatch_evidence_refs: vec![],
+            target_evidence_refs: vec![],
+            evidence_gaps: vec![],
+            canonical_bytes: None,
+        })
+        .await
+        .unwrap();
 
     let receipts = store.by_mandate("m1").await.unwrap();
     assert_eq!(receipts.len(), 2);

@@ -12,12 +12,12 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use crate::error::{StorageError, StorageResult};
 use crate::model::{
     AuditEvent, CasOutcome, EvidenceNodeRecord, EvidenceSource, ExecutionAttempt,
-    ExecutionAttemptState, MandateProjection, ProtocolObjectRecord, ReceiptProjection,
-    ReceiptOutcome, WebhookReceipt, WebhookRecordOutcome,
+    ExecutionAttemptState, MandateProjection, ProtocolObjectRecord, ReceiptOutcome,
+    ReceiptProjection, WebhookReceipt, WebhookRecordOutcome,
 };
 use crate::ports::{
-    AuditLog, EvidenceNodeStore, ExecutionAttemptStore, MandateProjectionStore, ProtocolObjectStore,
-    ReceiptProjectionStore, WebhookReceiptStore,
+    AuditLog, EvidenceNodeStore, ExecutionAttemptStore, MandateProjectionStore,
+    ProtocolObjectStore, ReceiptProjectionStore, WebhookReceiptStore,
 };
 
 fn backend(error: sqlx::Error) -> StorageError {
@@ -84,13 +84,14 @@ impl ProtocolObjectStore for PgProtocolObjectStore {
             return Ok(());
         }
         // Row already existed: enforce immutability by comparing bytes.
-        let existing: Vec<u8> = sqlx::query("SELECT bytes FROM protocol_objects WHERE object_id_hex = $1")
-            .bind(&record.object_id_hex)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(backend)?
-            .try_get("bytes")
-            .map_err(backend)?;
+        let existing: Vec<u8> =
+            sqlx::query("SELECT bytes FROM protocol_objects WHERE object_id_hex = $1")
+                .bind(&record.object_id_hex)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(backend)?
+                .try_get("bytes")
+                .map_err(backend)?;
         if existing == record.bytes {
             Ok(())
         } else {
@@ -339,13 +340,19 @@ impl ExecutionAttemptStore for PgExecutionAttemptStore {
         }
         sqlx::query(
             "INSERT INTO execution_attempts \
-             (attempt_id_hex, mandate_id_hex, state, created_at) \
-             VALUES ($1, $2, $3, $4)",
+             (attempt_id_hex, mandate_id_hex, state, created_at, intent_id_hex, \
+              reservation_token_digest, executor_identity, correlation_key, github_deployment_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         )
         .bind(&attempt.attempt_id_hex)
         .bind(&attempt.mandate_id_hex)
         .bind(state_to_str(&attempt.state))
         .bind(attempt.started_at_unix_seconds)
+        .bind(&attempt.intent_id_hex)
+        .bind(&attempt.reservation_token_digest)
+        .bind(&attempt.executor_identity)
+        .bind(&attempt.correlation_key)
+        .bind(attempt.github_deployment_id.map(|value| value as i64))
         .execute(&self.pool)
         .await
         .map_err(backend)?;
@@ -354,7 +361,8 @@ impl ExecutionAttemptStore for PgExecutionAttemptStore {
 
     async fn get(&self, attempt_id_hex: &str) -> StorageResult<Option<ExecutionAttempt>> {
         let row = sqlx::query(
-            "SELECT mandate_id_hex, state, created_at, github_deployment_id \
+            "SELECT mandate_id_hex, state, created_at, github_deployment_id, intent_id_hex, \
+             reservation_token_digest, executor_identity, correlation_key \
              FROM execution_attempts WHERE attempt_id_hex = $1",
         )
         .bind(attempt_id_hex)
@@ -365,14 +373,17 @@ impl ExecutionAttemptStore for PgExecutionAttemptStore {
             Ok(ExecutionAttempt {
                 attempt_id_hex: attempt_id_hex.to_string(),
                 mandate_id_hex: row.try_get("mandate_id_hex").map_err(backend)?,
-                intent_id_hex: String::new(),
-                reservation_token_digest: String::new(),
-                executor_identity: String::new(),
-                correlation_key: String::new(),
+                intent_id_hex: row.try_get("intent_id_hex").map_err(backend)?,
+                reservation_token_digest: row
+                    .try_get("reservation_token_digest")
+                    .map_err(backend)?,
+                executor_identity: row.try_get("executor_identity").map_err(backend)?,
+                correlation_key: row.try_get("correlation_key").map_err(backend)?,
                 started_at_unix_seconds: row.try_get("created_at").map_err(backend)?,
                 dispatch_boundary_at_unix_seconds: None,
                 state: str_to_state(row.try_get::<String, _>("state").map_err(backend)?),
-                github_deployment_id: row.try_get::<Option<i64>, _>("github_deployment_id")
+                github_deployment_id: row
+                    .try_get::<Option<i64>, _>("github_deployment_id")
                     .map_err(backend)?
                     .map(|v| v as u64),
             })
@@ -385,14 +396,13 @@ impl ExecutionAttemptStore for PgExecutionAttemptStore {
         attempt_id_hex: &str,
         new_state: ExecutionAttemptState,
     ) -> StorageResult<()> {
-        let updated = sqlx::query(
-            "UPDATE execution_attempts SET state = $2 WHERE attempt_id_hex = $1",
-        )
-        .bind(attempt_id_hex)
-        .bind(state_to_str(&new_state))
-        .execute(&self.pool)
-        .await
-        .map_err(backend)?;
+        let updated =
+            sqlx::query("UPDATE execution_attempts SET state = $2 WHERE attempt_id_hex = $1")
+                .bind(attempt_id_hex)
+                .bind(state_to_str(&new_state))
+                .execute(&self.pool)
+                .await
+                .map_err(backend)?;
         if updated.rows_affected() == 0 {
             return Err(StorageError::Backend(format!(
                 "execution attempt `{attempt_id_hex}` not found"
@@ -424,7 +434,8 @@ impl ExecutionAttemptStore for PgExecutionAttemptStore {
 
     async fn by_mandate(&self, mandate_id_hex: &str) -> StorageResult<Vec<ExecutionAttempt>> {
         let rows = sqlx::query(
-            "SELECT attempt_id_hex, state, created_at, github_deployment_id \
+            "SELECT attempt_id_hex, state, created_at, github_deployment_id, intent_id_hex, \
+             reservation_token_digest, executor_identity, correlation_key \
              FROM execution_attempts WHERE mandate_id_hex = $1 ORDER BY created_at",
         )
         .bind(mandate_id_hex)
@@ -436,14 +447,17 @@ impl ExecutionAttemptStore for PgExecutionAttemptStore {
                 Ok(ExecutionAttempt {
                     attempt_id_hex: row.try_get("attempt_id_hex").map_err(backend)?,
                     mandate_id_hex: mandate_id_hex.to_string(),
-                    intent_id_hex: String::new(),
-                    reservation_token_digest: String::new(),
-                    executor_identity: String::new(),
-                    correlation_key: String::new(),
+                    intent_id_hex: row.try_get("intent_id_hex").map_err(backend)?,
+                    reservation_token_digest: row
+                        .try_get("reservation_token_digest")
+                        .map_err(backend)?,
+                    executor_identity: row.try_get("executor_identity").map_err(backend)?,
+                    correlation_key: row.try_get("correlation_key").map_err(backend)?,
                     started_at_unix_seconds: row.try_get("created_at").map_err(backend)?,
                     dispatch_boundary_at_unix_seconds: None,
                     state: str_to_state(row.try_get::<String, _>("state").map_err(backend)?),
-                    github_deployment_id: row.try_get::<Option<i64>, _>("github_deployment_id")
+                    github_deployment_id: row
+                        .try_get::<Option<i64>, _>("github_deployment_id")
                         .map_err(backend)?
                         .map(|v| v as u64),
                 })
@@ -451,9 +465,13 @@ impl ExecutionAttemptStore for PgExecutionAttemptStore {
             .collect()
     }
 
-    async fn by_deployment_id(&self, deployment_id: u64) -> StorageResult<Option<ExecutionAttempt>> {
+    async fn by_deployment_id(
+        &self,
+        deployment_id: u64,
+    ) -> StorageResult<Option<ExecutionAttempt>> {
         let row = sqlx::query(
-            "SELECT attempt_id_hex, mandate_id_hex, state, created_at, github_deployment_id \
+            "SELECT attempt_id_hex, mandate_id_hex, state, created_at, github_deployment_id, \
+             intent_id_hex, reservation_token_digest, executor_identity, correlation_key \
              FROM execution_attempts WHERE github_deployment_id = $1",
         )
         .bind(deployment_id as i64)
@@ -464,10 +482,12 @@ impl ExecutionAttemptStore for PgExecutionAttemptStore {
             Ok(ExecutionAttempt {
                 attempt_id_hex: row.try_get("attempt_id_hex").map_err(backend)?,
                 mandate_id_hex: row.try_get("mandate_id_hex").map_err(backend)?,
-                intent_id_hex: String::new(),
-                reservation_token_digest: String::new(),
-                executor_identity: String::new(),
-                correlation_key: String::new(),
+                intent_id_hex: row.try_get("intent_id_hex").map_err(backend)?,
+                reservation_token_digest: row
+                    .try_get("reservation_token_digest")
+                    .map_err(backend)?,
+                executor_identity: row.try_get("executor_identity").map_err(backend)?,
+                correlation_key: row.try_get("correlation_key").map_err(backend)?,
                 started_at_unix_seconds: row.try_get("created_at").map_err(backend)?,
                 dispatch_boundary_at_unix_seconds: None,
                 state: str_to_state(row.try_get::<String, _>("state").map_err(backend)?),
@@ -500,13 +520,29 @@ impl ReceiptProjectionStore for PgReceiptProjectionStore {
         }
         sqlx::query(
             "INSERT INTO receipt_projections \
-             (receipt_id_hex, mandate_id_hex, outcome, created_at) \
-             VALUES ($1, $2, $3, $4)",
+             (receipt_id_hex, mandate_id_hex, outcome, created_at, intent_id_hex, attempt_id_hex, \
+              dispatch_evidence_refs, target_evidence_refs, evidence_gaps, canonical_bytes) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         )
         .bind(&receipt.receipt_id_hex)
         .bind(&receipt.mandate_id_hex)
         .bind(outcome_to_str(&receipt.outcome))
         .bind(receipt.created_at_unix_seconds)
+        .bind(&receipt.intent_id_hex)
+        .bind(&receipt.attempt_id_hex)
+        .bind(
+            serde_json::to_string(&receipt.dispatch_evidence_refs)
+                .map_err(|error| StorageError::Backend(error.to_string()))?,
+        )
+        .bind(
+            serde_json::to_string(&receipt.target_evidence_refs)
+                .map_err(|error| StorageError::Backend(error.to_string()))?,
+        )
+        .bind(
+            serde_json::to_string(&receipt.evidence_gaps)
+                .map_err(|error| StorageError::Backend(error.to_string()))?,
+        )
+        .bind(&receipt.canonical_bytes)
         .execute(&self.pool)
         .await
         .map_err(backend)?;
@@ -524,16 +560,17 @@ impl ReceiptProjectionStore for PgReceiptProjectionStore {
         .await
         .map_err(backend)?;
         row.map(|row| {
-            let dispatch_refs_str: String = row.try_get("dispatch_evidence_refs").map_err(backend)?;
+            let dispatch_refs_str: String =
+                row.try_get("dispatch_evidence_refs").map_err(backend)?;
             let dispatch_evidence_refs: Vec<String> =
                 serde_json::from_str(&dispatch_refs_str).unwrap_or_default();
             let target_refs_str: String = row.try_get("target_evidence_refs").map_err(backend)?;
             let target_evidence_refs: Vec<String> =
                 serde_json::from_str(&target_refs_str).unwrap_or_default();
             let gaps_str: String = row.try_get("evidence_gaps").map_err(backend)?;
-            let evidence_gaps: Vec<String> =
-                serde_json::from_str(&gaps_str).unwrap_or_default();
-            let canonical_bytes: Option<Vec<u8>> = row.try_get("canonical_bytes").map_err(backend)?;
+            let evidence_gaps: Vec<String> = serde_json::from_str(&gaps_str).unwrap_or_default();
+            let canonical_bytes: Option<Vec<u8>> =
+                row.try_get("canonical_bytes").map_err(backend)?;
             Ok(ReceiptProjection {
                 receipt_id_hex: receipt_id_hex.to_string(),
                 mandate_id_hex: row.try_get("mandate_id_hex").map_err(backend)?,
@@ -562,16 +599,19 @@ impl ReceiptProjectionStore for PgReceiptProjectionStore {
         .map_err(backend)?;
         rows.into_iter()
             .map(|row| {
-                let dispatch_refs_str: String = row.try_get("dispatch_evidence_refs").map_err(backend)?;
+                let dispatch_refs_str: String =
+                    row.try_get("dispatch_evidence_refs").map_err(backend)?;
                 let dispatch_evidence_refs: Vec<String> =
                     serde_json::from_str(&dispatch_refs_str).unwrap_or_default();
-                let target_refs_str: String = row.try_get("target_evidence_refs").map_err(backend)?;
+                let target_refs_str: String =
+                    row.try_get("target_evidence_refs").map_err(backend)?;
                 let target_evidence_refs: Vec<String> =
                     serde_json::from_str(&target_refs_str).unwrap_or_default();
                 let gaps_str: String = row.try_get("evidence_gaps").map_err(backend)?;
                 let evidence_gaps: Vec<String> =
                     serde_json::from_str(&gaps_str).unwrap_or_default();
-                let canonical_bytes: Option<Vec<u8>> = row.try_get("canonical_bytes").map_err(backend)?;
+                let canonical_bytes: Option<Vec<u8>> =
+                    row.try_get("canonical_bytes").map_err(backend)?;
                 Ok(ReceiptProjection {
                     receipt_id_hex: row.try_get("receipt_id_hex").map_err(backend)?,
                     mandate_id_hex: mandate_id_hex.to_string(),
@@ -673,10 +713,14 @@ impl EvidenceNodeStore for PgEvidenceNodeStore {
                 source,
                 producer_identity: row.try_get("producer_identity").map_err(backend)?,
                 collected_at_unix_seconds: row.try_get("collected_at").map_err(backend)?,
-                asserted_event_at_unix_seconds: row.try_get("asserted_event_at").map_err(backend)?,
+                asserted_event_at_unix_seconds: row
+                    .try_get("asserted_event_at")
+                    .map_err(backend)?,
                 content_digest,
                 media_type: row.try_get("media_type").map_err(backend)?,
-                disclosure_classification: row.try_get("disclosure_classification").map_err(backend)?,
+                disclosure_classification: row
+                    .try_get("disclosure_classification")
+                    .map_err(backend)?,
                 relationships,
             })
         })
@@ -697,11 +741,9 @@ impl EvidenceNodeStore for PgEvidenceNodeStore {
             .map(|row| {
                 let node_id_hex: String = row.try_get("node_id_hex").map_err(backend)?;
                 let content_hex: String = row.try_get("content_digest").map_err(backend)?;
-                let content_digest =
-                    crate::digest::ContentDigest::from_hex(&content_hex).ok_or_else(|| {
-                        StorageError::Backend(
-                            "stored content_digest is not valid hex".to_string(),
-                        )
+                let content_digest = crate::digest::ContentDigest::from_hex(&content_hex)
+                    .ok_or_else(|| {
+                        StorageError::Backend("stored content_digest is not valid hex".to_string())
                     })?;
                 let relationships_str: String = row.try_get("relationships").map_err(backend)?;
                 let relationships: Vec<String> =
@@ -720,10 +762,14 @@ impl EvidenceNodeStore for PgEvidenceNodeStore {
                     source,
                     producer_identity: row.try_get("producer_identity").map_err(backend)?,
                     collected_at_unix_seconds: row.try_get("collected_at").map_err(backend)?,
-                    asserted_event_at_unix_seconds: row.try_get("asserted_event_at").map_err(backend)?,
+                    asserted_event_at_unix_seconds: row
+                        .try_get("asserted_event_at")
+                        .map_err(backend)?,
                     content_digest,
                     media_type: row.try_get("media_type").map_err(backend)?,
-                    disclosure_classification: row.try_get("disclosure_classification").map_err(backend)?,
+                    disclosure_classification: row
+                        .try_get("disclosure_classification")
+                        .map_err(backend)?,
                     relationships,
                 })
             })

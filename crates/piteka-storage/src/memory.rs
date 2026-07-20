@@ -12,9 +12,10 @@ use async_trait::async_trait;
 use crate::digest::ContentDigest;
 use crate::error::{StorageError, StorageResult};
 use crate::model::{
-    ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome, EvidenceDescriptor,
-    EvidenceNodeRecord, ExecutionAttempt, ExecutionAttemptState, MandateProjection,
-    ProtocolObjectRecord, ReceiptProjection, WebhookReceipt, WebhookRecordOutcome,
+    ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome,
+    EvidenceDescriptor, EvidenceNodeRecord, ExecutionAttempt, ExecutionAttemptState,
+    MandateProjection, ProtocolObjectRecord, ReceiptProjection, WebhookReceipt,
+    WebhookRecordOutcome,
 };
 use crate::ports::{
     ActionRequestStore, ApprovalDecisionStore, AuditLog, EvidenceNodeStore, EvidenceObjectStore,
@@ -253,10 +254,7 @@ impl EvidenceNodeStore for InMemoryEvidenceNodeStore {
                 .get(mandate_id_hex)
                 .cloned()
                 .unwrap_or_default();
-            Ok(ids
-                .iter()
-                .filter_map(|id| nodes.get(id).cloned())
-                .collect())
+            Ok(ids.iter().filter_map(|id| nodes.get(id).cloned()).collect())
         }
     }
 }
@@ -333,21 +331,14 @@ impl ActionRequestStore for InMemoryActionRequestStore {
         let Some(request) = requests.get_mut(request_id) else {
             return Ok(CasOutcome::Missing);
         };
-        let current_version = versions
-            .get(request_id)
-            .copied()
-            .unwrap_or(1);
+        let current_version = versions.get(request_id).copied().unwrap_or(1);
         if current_version != expected_version {
-            return Ok(CasOutcome::Conflict {
-                current_version,
-            });
+            return Ok(CasOutcome::Conflict { current_version });
         }
         let new_version = current_version + 1;
         versions.insert(request_id.to_string(), new_version);
         request.status = new_status;
-        Ok(CasOutcome::Applied {
-            new_version,
-        })
+        Ok(CasOutcome::Applied { new_version })
     }
 }
 
@@ -490,7 +481,10 @@ impl ExecutionAttemptStore for InMemoryExecutionAttemptStore {
             .collect())
     }
 
-    async fn by_deployment_id(&self, deployment_id: u64) -> StorageResult<Option<ExecutionAttempt>> {
+    async fn by_deployment_id(
+        &self,
+        deployment_id: u64,
+    ) -> StorageResult<Option<ExecutionAttempt>> {
         let attempts = self.attempts.lock().expect("lock poisoned");
         Ok(attempts
             .values()
@@ -566,8 +560,15 @@ impl ActionRequestStore for std::sync::Arc<InMemoryActionRequestStore> {
     async fn list(&self) -> StorageResult<Vec<ActionRequest>> {
         self.as_ref().list().await
     }
-    async fn compare_and_swap(&self, request_id: &str, expected_version: i64, new_status: ActionRequestStatus) -> StorageResult<CasOutcome> {
-        self.as_ref().compare_and_swap(request_id, expected_version, new_status).await
+    async fn compare_and_swap(
+        &self,
+        request_id: &str,
+        expected_version: i64,
+        new_status: ActionRequestStatus,
+    ) -> StorageResult<CasOutcome> {
+        self.as_ref()
+            .compare_and_swap(request_id, expected_version, new_status)
+            .await
     }
 }
 
@@ -638,16 +639,29 @@ impl ExecutionAttemptStore for std::sync::Arc<InMemoryExecutionAttemptStore> {
     async fn get(&self, attempt_id_hex: &str) -> StorageResult<Option<ExecutionAttempt>> {
         self.as_ref().get(attempt_id_hex).await
     }
-    async fn update_state(&self, attempt_id_hex: &str, new_state: ExecutionAttemptState) -> StorageResult<()> {
+    async fn update_state(
+        &self,
+        attempt_id_hex: &str,
+        new_state: ExecutionAttemptState,
+    ) -> StorageResult<()> {
         self.as_ref().update_state(attempt_id_hex, new_state).await
     }
-    async fn update_deployment_id(&self, attempt_id_hex: &str, deployment_id: u64) -> StorageResult<()> {
-        self.as_ref().update_deployment_id(attempt_id_hex, deployment_id).await
+    async fn update_deployment_id(
+        &self,
+        attempt_id_hex: &str,
+        deployment_id: u64,
+    ) -> StorageResult<()> {
+        self.as_ref()
+            .update_deployment_id(attempt_id_hex, deployment_id)
+            .await
     }
     async fn by_mandate(&self, mandate_id_hex: &str) -> StorageResult<Vec<ExecutionAttempt>> {
         self.as_ref().by_mandate(mandate_id_hex).await
     }
-    async fn by_deployment_id(&self, deployment_id: u64) -> StorageResult<Option<ExecutionAttempt>> {
+    async fn by_deployment_id(
+        &self,
+        deployment_id: u64,
+    ) -> StorageResult<Option<ExecutionAttempt>> {
         self.as_ref().by_deployment_id(deployment_id).await
     }
 }
@@ -689,6 +703,8 @@ impl MandateProjectionStore for std::sync::Arc<InMemoryMandateProjectionStore> {
         expected_version: i64,
         new_state: &str,
     ) -> StorageResult<CasOutcome> {
-        self.as_ref().compare_and_swap(mandate_id_hex, expected_version, new_state).await
+        self.as_ref()
+            .compare_and_swap(mandate_id_hex, expected_version, new_state)
+            .await
     }
 }

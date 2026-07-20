@@ -5,9 +5,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use piteka_domain::{Capability, ConfiguredOrganization, SessionId, UserId};
 
-use crate::authz::{AuthorizationRequest, Denial, ReauthPolicy};
-use crate::session::{AuthenticatedSession, SessionAuthority, SessionSigner, Signature, SignatureAlgorithm};
 use crate::Clock;
+use crate::authz::{AuthorizationRequest, Denial, ReauthPolicy};
+use crate::session::{
+    AuthenticatedSession, SessionAuthority, SessionSigner, Signature, SignatureAlgorithm,
+};
 
 struct FoldSigner;
 impl SessionSigner for FoldSigner {
@@ -43,9 +45,14 @@ impl Clock for FixedClock {
 }
 
 fn session(user: &str, clock: &FixedClock) -> AuthenticatedSession {
-    let authority = SessionAuthority::new(FoldSigner, clock.clone(), ConfiguredOrganization::demo());
+    let authority =
+        SessionAuthority::new(FoldSigner, clock.clone(), ConfiguredOrganization::demo());
     let signed = authority
-        .issue(&UserId::new(user).unwrap(), SessionId::from_bytes([9; 16]), 10_000)
+        .issue(
+            &UserId::new(user).unwrap(),
+            SessionId::from_bytes([9; 16]),
+            10_000,
+        )
         .unwrap();
     authority.authenticate(&signed).unwrap()
 }
@@ -64,13 +71,15 @@ fn role_enforcement_denies_missing_capability() {
         Err(Denial::Unauthorized(Capability::ApproveAction))
     );
     // The requester's own capability is granted.
-    assert!(policy
-        .evaluate(
-            &requester,
-            &AuthorizationRequest::standard(Capability::ProposeAction),
-            1_000,
-        )
-        .is_ok());
+    assert!(
+        policy
+            .evaluate(
+                &requester,
+                &AuthorizationRequest::standard(Capability::ProposeAction),
+                1_000,
+            )
+            .is_ok()
+    );
 }
 
 #[test]
@@ -95,11 +104,13 @@ fn standard_actions_ignore_session_age() {
     let approver = session("approver", &clock);
     clock.set(9_000); // far past any re-auth window, but still valid
     let policy = ReauthPolicy::new(300);
-    assert!(policy
-        .evaluate(
-            &approver,
-            &AuthorizationRequest::standard(Capability::ApproveAction),
-            9_000,
-        )
-        .is_ok());
+    assert!(
+        policy
+            .evaluate(
+                &approver,
+                &AuthorizationRequest::standard(Capability::ApproveAction),
+                9_000,
+            )
+            .is_ok()
+    );
 }

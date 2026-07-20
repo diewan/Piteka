@@ -32,9 +32,9 @@ pub use memory::{
 };
 pub use model::{
     ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome,
-    EvidenceDescriptor, EvidenceNodeRecord, EvidenceSource, ExecutionAttempt, ExecutionAttemptState,
-    MandateProjection, ProtocolObjectRecord, ReceiptOutcome, ReceiptProjection, WebhookReceipt,
-    WebhookRecordOutcome,
+    EvidenceDescriptor, EvidenceNodeRecord, EvidenceSource, ExecutionAttempt,
+    ExecutionAttemptState, MandateProjection, ProtocolObjectRecord, ReceiptOutcome,
+    ReceiptProjection, WebhookReceipt, WebhookRecordOutcome,
 };
 pub use ports::{
     ActionRequestStore, ApprovalDecisionStore, AuditLog, EvidenceNodeStore, EvidenceObjectStore,

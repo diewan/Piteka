@@ -27,29 +27,29 @@ mod reconciliation_tests;
 mod session_tests;
 
 pub use action_request::{
-    ActionRequestPorts, ActionRequestUseCase, ActionRequestUseCaseError, Approved, Proposed, Rejected, Revoked,
+    ActionRequestPorts, ActionRequestUseCase, ActionRequestUseCaseError, Approved, Proposed,
+    Rejected, Revoked,
 };
 pub use authz::{ActionSensitivity, AuthorizationRequest, Denial, ReauthPolicy};
 pub use dispatch::{
-    DispatchOutcome, DispatchPorts, DispatchUseCase, Dispatched, DispatchError,
-    ReservationFailed,
-};
-pub use receipt_production::{
-    DeploymentStatusEvent, ReceiptProductionError, ReceiptProductionResult,
-    ReceiptProducingProcessor, map_github_state_to_outcome, parse_deployment_status,
-    produce_receipt_from_webhook,
+    DispatchError, DispatchOutcome, DispatchPorts, DispatchUseCase, Dispatched, ReservationFailed,
 };
 pub use observation::{
     EvidenceGap, Observation, ObservationError, ObservationPort, ObservationQuery,
     ObservationQueryResult, ObservationUseCase, SourceHealth,
 };
-pub use session::{
-    AuthError, AuthenticatedSession, SessionAuthority, SessionSigner, Signature, SignatureAlgorithm,
-    SignedSession,
+pub use receipt_production::{
+    DeploymentStatusEvent, ReceiptProducingProcessor, ReceiptProductionError,
+    ReceiptProductionResult, map_github_state_to_outcome, parse_deployment_status,
+    produce_receipt_from_webhook,
 };
 pub use reconciliation::{
     CorrelatedDeployment, DeploymentStatusProvider, ReconciliationError, ReconciliationOutcome,
     ReconciliationPorts, ReconciliationUseCase,
+};
+pub use session::{
+    AuthError, AuthenticatedSession, SessionAuthority, SessionSigner, Signature,
+    SignatureAlgorithm, SignedSession,
 };
 pub use webhook_ingestion::{
     IngestionOutcome, WebhookEventProcessor, WebhookIngestionPorts, WebhookIngestionUseCase,

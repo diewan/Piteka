@@ -19,7 +19,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let assets_router = piteka_web::assets_router();
 
     // Build the API router
-    let api_router = piteka_api::routes::build_full_router(use_case);
+    let api_router = if let Ok(database_url) = std::env::var("DATABASE_URL") {
+        piteka_api::routes::build_full_router(test_ports.use_case())
+            .merge(piteka_api::routes::build_live_webhook_router(&database_url).await?)
+    } else {
+        piteka_api::routes::build_full_router_with_webhook(test_ports)
+    };
 
     // Combine everything
     let app = Router::new()

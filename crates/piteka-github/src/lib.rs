@@ -62,7 +62,9 @@ use piteka_ports::github::{
     WebhookSignatureResult,
 };
 use pkcs8::DecodePrivateKey;
-use serde::Serialize;
+use rsa::pkcs1::DecodeRsaPrivateKey;
+use rsa::signature::{SignatureEncoding, Signer};
+use serde::{Deserialize, Serialize};
 
 /// GitHub Deployments API request body for the controlled deployment profile.
 ///
@@ -79,8 +81,11 @@ struct CreateDeploymentRequest<'a> {
 
 #[derive(Debug, Serialize)]
 struct DeploymentCorrelationPayload<'a> {
-    payload_commitment: &'a str,
+    schema_version: u8,
+    #[serde(rename = "piteka_attempt_digest")]
     attempt_digest: String,
+    #[serde(skip)]
+    _payload_commitment: &'a str,
 }
 
 fn deployment_request_body<'a>(
@@ -94,8 +99,9 @@ fn deployment_request_body<'a>(
         auto_merge: false,
         environment: environment.as_str(),
         payload: DeploymentCorrelationPayload {
-            payload_commitment,
+            schema_version: 1,
             attempt_digest: hex::encode(attempt_digest),
+            _payload_commitment: payload_commitment,
         },
     }
 }
@@ -166,17 +172,19 @@ fn generate_jwt(
     let private_key_pem = std::str::from_utf8(private_key)
         .map_err(|_| GitHubAppError::SecretResolution(GitHubSecretError::EmptySecret))?;
 
-    let private_key = rsa::RsaPrivateKey::from_pkcs8_pem(private_key_pem).map_err(|e| {
-        GitHubAppError::SecretResolution(GitHubSecretError::StoreUnavailable(e.to_string()))
-    })?;
-
-    let signature = private_key
-        .sign(rsa::Pss::new::<sha2::Sha256>(), signing_input.as_bytes())
-        .map_err(|e| {
-            GitHubAppError::SecretResolution(GitHubSecretError::StoreUnavailable(e.to_string()))
+    let private_key = rsa::RsaPrivateKey::from_pkcs8_pem(private_key_pem)
+        .or_else(|_| rsa::RsaPrivateKey::from_pkcs1_pem(private_key_pem))
+        .map_err(|error| {
+            GitHubAppError::SecretResolution(GitHubSecretError::StoreUnavailable(format!(
+                "invalid GitHub App private key: {error}"
+            )))
         })?;
+    // GitHub App JWTs use RS256 (PKCS#1 v1.5), not RSA-PSS.
+    let signing_key = rsa::pkcs1v15::SigningKey::<sha2::Sha256>::new(private_key);
+    let signature = signing_key.sign(signing_input.as_bytes());
 
-    let signature_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature);
+    let signature_b64 =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes());
 
     Ok(JwtToken {
         token: format!("{header}.{payload_b64}.{signature_b64}"),
@@ -184,16 +192,7 @@ fn generate_jwt(
     })
 }
 
-/// Creates an installation access token for a given installation.
-///
-/// This is a stub implementation. A production adapter would:
-/// 1. Generate a JWT for the App
-/// 2. POST to `/app/installations/{installation_id}/access_tokens`
-/// 3. Return the token
-///
-/// For the first demo, the adapter uses a pre-provided installation token
-/// that is resolved through the secret resolver, keeping the HTTP dependency
-/// out of the core adapter. The token is treated as opaque bytes.
+/// Creates a short-lived installation access token for a given installation.
 ///
 /// # Parameters
 ///
@@ -204,23 +203,59 @@ fn generate_jwt(
 /// # Errors
 ///
 /// Returns an error when JWT generation fails.
-fn create_installation_token(
+#[derive(Deserialize)]
+struct InstallationTokenResponse {
+    token: String,
+}
+
+async fn create_installation_token(
+    client: &reqwest::Client,
+    api_base_url: &str,
+    app_id: u64,
     installation_id: &GitHubInstallationId,
     app_secret: &[u8],
     now: u64,
 ) -> Result<String, GitHubAppError> {
-    // In production, this would:
-    // 1. Extract app_id from the private key or configuration
-    // 2. Generate JWT
-    // 3. Call GitHub API to exchange JWT for installation access token
-    //
-    // For the demo, we return a placeholder that the caller can replace
-    // with a real token resolved from the secret store.
-    let _ = installation_id;
-    let _ = app_secret;
-    let _ = now;
-    // Return a placeholder — in production this would be a real token
-    Ok("ghs_demo_placeholder_token".to_string())
+    let issued_at = now.saturating_sub(60);
+    let jwt = generate_jwt(app_id, app_secret, issued_at)?;
+    let url = format!(
+        "{api_base_url}/app/installations/{}/access_tokens",
+        installation_id.as_u64()
+    );
+    let response = client
+        .post(url)
+        .bearer_auth(jwt.token)
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header(reqwest::header::USER_AGENT, "piteka-controlled-demo")
+        .send()
+        .await
+        .map_err(|error| GitHubAppError::ApiError(error.to_string()))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(GitHubAppError::ApiError(format!(
+            "installation token exchange returned {status}: {}",
+            redact_api_body(&body)
+        )));
+    }
+    response
+        .json::<InstallationTokenResponse>()
+        .await
+        .map(|value| value.token)
+        .map_err(|error| GitHubAppError::ApiError(error.to_string()))
+}
+
+fn redact_api_body(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("message")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "GitHub API request failed".to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -317,6 +352,9 @@ where
     app_secret_reference: GitHubSecretReference,
     webhook_secret_reference: GitHubWebhookSecret,
     serving_org: OrganizationId,
+    app_id: Option<u64>,
+    api_base_url: String,
+    client: reqwest::Client,
 }
 
 impl<R> GitHubAppAdapter<R>
@@ -351,7 +389,151 @@ where
             webhook_secret_reference: GitHubWebhookSecret::new(webhook_secret_reference)
                 .map_err(|_| GitHubAppError::EmptyField("webhook_secret_reference"))?,
             serving_org,
+            app_id: None,
+            api_base_url: "https://api.github.com".to_string(),
+            client: reqwest::Client::new(),
         })
+    }
+
+    /// Enables real GitHub App authentication and HTTP dispatch.
+    #[must_use]
+    pub fn with_live_transport(mut self, app_id: u64) -> Self {
+        self.app_id = Some(app_id);
+        self
+    }
+
+    /// Overrides the GitHub API base URL for integration testing.
+    #[must_use]
+    pub fn with_api_base_url(mut self, api_base_url: impl Into<String>) -> Self {
+        self.api_base_url = api_base_url.into().trim_end_matches('/').to_string();
+        self
+    }
+
+    /// Reads the configured GitHub App webhook URL using App authentication.
+    pub async fn webhook_config_url(&self) -> Result<String, GitHubAppError> {
+        let app_id = self.app_id.ok_or_else(|| {
+            GitHubAppError::ApiError("live GitHub transport is not configured".to_string())
+        })?;
+        let secret = self
+            .resolver
+            .resolve_app_secret(&self.app_secret_reference)
+            .await
+            .map_err(GitHubAppError::SecretResolution)?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| GitHubAppError::ApiError(error.to_string()))?
+            .as_secs();
+        let jwt = generate_jwt(app_id, &secret, now.saturating_sub(60));
+        drop(secret);
+        let response = self
+            .client
+            .get(format!("{}/app/hook/config", self.api_base_url))
+            .bearer_auth(jwt?.token)
+            .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header(reqwest::header::USER_AGENT, "piteka-controlled-demo")
+            .send()
+            .await
+            .map_err(|error| GitHubAppError::ApiError(error.to_string()))?;
+        let status = response.status();
+        let value: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|error| GitHubAppError::ApiError(error.to_string()))?;
+        if !status.is_success() {
+            return Err(GitHubAppError::ApiError(format!(
+                "webhook configuration returned {status}"
+            )));
+        }
+        value
+            .get("url")
+            .and_then(|value| value.as_str())
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                GitHubAppError::ApiError("webhook configuration omitted url".to_string())
+            })
+    }
+
+    /// Lists recent GitHub App webhook delivery metadata using App authentication.
+    pub async fn recent_webhook_deliveries(&self) -> Result<serde_json::Value, GitHubAppError> {
+        let app_id = self.app_id.ok_or_else(|| {
+            GitHubAppError::ApiError("live GitHub transport is not configured".to_string())
+        })?;
+        let secret = self
+            .resolver
+            .resolve_app_secret(&self.app_secret_reference)
+            .await
+            .map_err(GitHubAppError::SecretResolution)?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| GitHubAppError::ApiError(error.to_string()))?
+            .as_secs();
+        let jwt = generate_jwt(app_id, &secret, now.saturating_sub(60));
+        drop(secret);
+        let response = self
+            .client
+            .get(format!(
+                "{}/app/hook/deliveries?per_page=100",
+                self.api_base_url
+            ))
+            .bearer_auth(jwt?.token)
+            .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header(reqwest::header::USER_AGENT, "piteka-controlled-demo")
+            .send()
+            .await
+            .map_err(|error| GitHubAppError::ApiError(error.to_string()))?;
+        let status = response.status();
+        let value = response
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|error| GitHubAppError::ApiError(error.to_string()))?;
+        if status.is_success() {
+            Ok(value)
+        } else {
+            Err(GitHubAppError::ApiError(format!(
+                "webhook deliveries returned {status}"
+            )))
+        }
+    }
+
+    /// Requests redelivery of one GitHub App webhook delivery.
+    pub async fn redeliver_webhook(&self, delivery_id: u64) -> Result<(), GitHubAppError> {
+        let app_id = self.app_id.ok_or_else(|| {
+            GitHubAppError::ApiError("live GitHub transport is not configured".to_string())
+        })?;
+        let secret = self
+            .resolver
+            .resolve_app_secret(&self.app_secret_reference)
+            .await
+            .map_err(GitHubAppError::SecretResolution)?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| GitHubAppError::ApiError(error.to_string()))?
+            .as_secs();
+        let jwt = generate_jwt(app_id, &secret, now.saturating_sub(60));
+        drop(secret);
+        let response = self
+            .client
+            .post(format!(
+                "{}/app/hook/deliveries/{delivery_id}/attempts",
+                self.api_base_url
+            ))
+            .bearer_auth(jwt?.token)
+            .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header(reqwest::header::USER_AGENT, "piteka-controlled-demo")
+            .send()
+            .await
+            .map_err(|error| GitHubAppError::ApiError(error.to_string()))?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(GitHubAppError::ApiError(format!(
+                "webhook redelivery returned {}",
+                response.status()
+            )))
+        }
     }
 
     /// Returns the installation context.
@@ -462,42 +644,70 @@ where
             .await
             .map_err(GitHubAppError::SecretResolution)?;
 
+        let Some(app_id) = self.app_id else {
+            drop(app_secret);
+            return Err(GitHubAppError::ApiError(
+                "live GitHub transport is not configured".to_string(),
+            ));
+        };
         let token = create_installation_token(
+            &self.client,
+            &self.api_base_url,
+            app_id,
             installation_id,
             &app_secret,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("system clock must be after the Unix epoch")
                 .as_secs(),
-        );
+        )
+        .await;
 
         // Drop the secret bytes immediately after use
         drop(app_secret);
 
         let token = token?;
 
-        let _ = token;
-        let _ = repository_id;
         // Construct the exact provider body at the adapter boundary. The
         // infrastructure HTTP transport sends these bytes unchanged.
         let request =
             deployment_request_body(commit_sha, environment, payload_commitment, attempt_digest);
-        let _request_body = serde_json::to_vec(&request)
+        #[derive(Deserialize)]
+        struct DeploymentResponse {
+            id: u64,
+            url: String,
+        }
+        let url = format!(
+            "{}/repos/{}/deployments",
+            self.api_base_url,
+            self.context.repository_name.as_str()
+        );
+        let response = self
+            .client
+            .post(url)
+            .bearer_auth(token)
+            .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header(reqwest::header::USER_AGENT, "piteka-controlled-demo")
+            .json(&request)
+            .send()
+            .await
             .map_err(|error| GitHubAppError::ApiError(error.to_string()))?;
-
-        // In production, this would:
-        // 1. POST to `/repos/{owner}/{repo}/deployments` with the deployment payload
-        // 2. Include the installation access token in the Authorization header
-        // 3. Parse the response to extract the deployment ID and URL
-        //
-        // For the demo, we return a placeholder deployment ID.
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(GitHubAppError::ApiError(format!(
+                "deployment creation returned {status}: {}",
+                redact_api_body(&body)
+            )));
+        }
+        let created = response
+            .json::<DeploymentResponse>()
+            .await
+            .map_err(|error| GitHubAppError::ApiError(error.to_string()))?;
         Ok(DeploymentCreated {
-            deployment_id: installation_id.as_u64() * 1000 + 1,
-            url: format!(
-                "https://github.com/{}/deployments/{}",
-                self.context.repository_name.as_str(),
-                installation_id.as_u64() * 1000 + 1
-            ),
+            deployment_id: created.id,
+            url: created.url,
             attempt_digest,
         })
     }
@@ -778,7 +988,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_deployment_success() {
+    async fn create_deployment_fails_closed_without_live_transport() {
         let adapter = make_test_adapter();
 
         let result = adapter
@@ -793,10 +1003,8 @@ mod tests {
             )
             .await;
 
-        assert!(result.is_ok());
-        let deployment = result.unwrap();
-        assert_eq!(deployment.deployment_id, 12345 * 1000 + 1);
-        assert!(deployment.url.contains("demo-repo"));
+        assert!(matches!(result, Err(GitHubAppError::ApiError(message)) if
+            message.contains("live GitHub transport is not configured")));
     }
 
     #[tokio::test]
@@ -901,11 +1109,9 @@ mod tests {
         assert_eq!(value["ref"], "abcdef0123456789abcdef0123456789abcdef01");
         assert_eq!(value["auto_merge"], false);
         assert_eq!(value["environment"], "production");
-        assert_eq!(value["payload"]["attempt_digest"], "ab".repeat(32));
-        assert_eq!(
-            value["payload"]["payload_commitment"],
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        );
+        assert_eq!(value["payload"]["schema_version"], 1);
+        assert_eq!(value["payload"]["piteka_attempt_digest"], "ab".repeat(32));
+        assert_eq!(value["payload"].as_object().unwrap().len(), 2);
     }
 
     #[tokio::test]

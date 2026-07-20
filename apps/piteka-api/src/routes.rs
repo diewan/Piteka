@@ -56,6 +56,43 @@ pub fn build_full_router_with_webhook(ports: TestPorts) -> Router {
     )
 }
 
+/// Builds the PostgreSQL-backed live webhook route.
+pub async fn build_live_webhook_router(
+    database_url: &str,
+) -> Result<Router, piteka_storage::StorageError> {
+    let pool = piteka_storage::postgres::connect(database_url).await?;
+    piteka_storage::postgres::run_migrations(&pool).await?;
+    let webhook_receipts = piteka_storage::postgres::PgWebhookReceiptStore::new(pool.clone());
+    let audit = piteka_storage::postgres::PgAuditLog::new(pool.clone());
+    let attempts = std::sync::Arc::new(piteka_storage::postgres::PgExecutionAttemptStore::new(
+        pool.clone(),
+    ));
+    let processor = piteka_application::ReceiptProducingProcessor::new(
+        piteka_storage::postgres::PgReceiptProjectionStore::new(pool.clone()),
+        piteka_storage::postgres::PgEvidenceNodeStore::new(pool),
+        audit.clone(),
+        attempts,
+    );
+    let ingestion = piteka_application::WebhookIngestionUseCase::new(
+        piteka_application::WebhookIngestionPorts::new(processor, webhook_receipts, audit),
+    );
+    let state = crate::webhook::WebhookStateConcrete {
+        ingestion,
+        clock: piteka_application::SystemClock,
+        github: std::sync::Arc::new(crate::MockGitHubAdapter::default()),
+        webhook_secret: piteka_ports::github::GitHubWebhookSecret::new(
+            "live-webhook-secret-reference",
+        )
+        .expect("static secret reference is non-empty"),
+    };
+    Ok(Router::new()
+        .route(
+            "/api/v1/webhooks/github",
+            post(crate::webhook::handle_webhook),
+        )
+        .with_state(state))
+}
+
 // ── Handlers ────────────────────────────────────────────────────────────────
 
 async fn list_action_requests(State(use_case): State<ActionRequestUseCase<TestPorts>>) -> Response {

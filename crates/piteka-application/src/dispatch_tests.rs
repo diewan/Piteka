@@ -11,13 +11,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::Clock;
-use crate::dispatch::{DispatchOutcome, DispatchPorts, DispatchUseCase, Dispatched};
+use crate::dispatch::{DispatchOutcome, DispatchPorts, DispatchUseCase};
 use piteka_domain::UserId;
 use piteka_storage::memory::{
     InMemoryActionRequestStore, InMemoryApprovalDecisionStore, InMemoryAuditLog,
     InMemoryExecutionAttemptStore, InMemoryMandateProjectionStore, InMemoryReceiptProjectionStore,
 };
-use piteka_storage::model::{ExecutionAttemptState, ReceiptOutcome};
+use piteka_storage::model::ExecutionAttemptState;
 use piteka_storage::ports::{
     ActionRequestStore, ApprovalDecisionStore, AuditLog, ExecutionAttemptStore,
     MandateProjectionStore, ReceiptProjectionStore,
@@ -459,10 +459,9 @@ async fn complete_dispatch_consumes_mandate_on_provider_acceptance() {
     let attempt = ports.attempt_store.get(&attempt_id).await.unwrap().unwrap();
     assert_eq!(attempt.state, ExecutionAttemptState::Accepted);
 
-    // Verify receipt was created with Succeeded outcome.
+    // Receipt production waits for authenticated provider evidence.
     let receipts = ports.receipt_store.by_mandate("mandate-1").await.unwrap();
-    assert_eq!(receipts.len(), 1);
-    assert_eq!(receipts[0].outcome, ReceiptOutcome::Succeeded);
+    assert!(receipts.is_empty());
 }
 
 #[tokio::test]
@@ -513,10 +512,9 @@ async fn complete_dispatch_quarantines_mandate_on_provider_failure() {
     let attempt = ports.attempt_store.get(&attempt_id).await.unwrap().unwrap();
     assert_eq!(attempt.state, ExecutionAttemptState::OutcomeAmbiguous);
 
-    // Verify receipt was created with Unknown outcome.
+    // Ambiguity does not fabricate a receipt.
     let receipts = ports.receipt_store.by_mandate("mandate-1").await.unwrap();
-    assert_eq!(receipts.len(), 1);
-    assert_eq!(receipts[0].outcome, ReceiptOutcome::Unknown);
+    assert!(receipts.is_empty());
 }
 
 #[tokio::test]
@@ -637,10 +635,9 @@ async fn reserve_and_dispatch_full_flow_provider_accepts() {
     let mandate = ports.mandate_store.get("mandate-1").await.unwrap().unwrap();
     assert_eq!(mandate.state, "consumed");
 
-    // Verify receipt exists.
+    // Receipt production waits for authenticated provider evidence.
     let receipts = ports.receipt_store.by_mandate("mandate-1").await.unwrap();
-    assert_eq!(receipts.len(), 1);
-    assert_eq!(receipts[0].outcome, ReceiptOutcome::Succeeded);
+    assert!(receipts.is_empty());
 }
 
 #[tokio::test]
@@ -677,10 +674,9 @@ async fn reserve_and_dispatch_full_flow_provider_rejects() {
     let mandate = ports.mandate_store.get("mandate-1").await.unwrap().unwrap();
     assert_eq!(mandate.state, "quarantined");
 
-    // Verify receipt with Unknown outcome.
+    // Ambiguity does not fabricate a receipt.
     let receipts = ports.receipt_store.by_mandate("mandate-1").await.unwrap();
-    assert_eq!(receipts.len(), 1);
-    assert_eq!(receipts[0].outcome, ReceiptOutcome::Unknown);
+    assert!(receipts.is_empty());
 }
 
 #[tokio::test]

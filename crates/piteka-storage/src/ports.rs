@@ -6,8 +6,8 @@ use crate::digest::ContentDigest;
 use crate::error::StorageResult;
 use crate::model::{
     ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome,
-    EvidenceDescriptor, EvidenceNodeRecord, ExecutionAttempt, MandateProjection, ProtocolObjectRecord,
-    ReceiptProjection, WebhookReceipt, WebhookRecordOutcome,
+    EvidenceDescriptor, EvidenceNodeRecord, ExecutionAttempt, MandateProjection,
+    ProtocolObjectRecord, ReceiptProjection, WebhookReceipt, WebhookRecordOutcome,
 };
 
 /// Immutable, id-addressed storage for canonical Parwana objects.
@@ -282,7 +282,8 @@ pub trait ExecutionAttemptStore: Send + Sync {
     /// # Errors
     ///
     /// Returns a backend error on failure.
-    async fn by_deployment_id(&self, deployment_id: u64) -> StorageResult<Option<ExecutionAttempt>>;
+    async fn by_deployment_id(&self, deployment_id: u64)
+    -> StorageResult<Option<ExecutionAttempt>>;
 }
 
 /// Storage for receipt projections.

@@ -289,6 +289,16 @@ impl piteka_ports::github::GitHubAppPort for MockGitHubAdapter {
         _webhook_secret: &piteka_ports::github::GitHubWebhookSecret,
     ) -> Result<piteka_ports::github::WebhookSignatureResult, piteka_ports::github::GitHubAppError>
     {
+        if let Ok(secret) = std::env::var("PITEKA_GITHUB_WEBHOOK_SECRET") {
+            if secret.is_empty() {
+                return Ok(piteka_ports::github::WebhookSignatureResult::Invalid);
+            }
+            return Ok(piteka_github::verify_webhook_signature_internal(
+                &_payload.body,
+                &_payload.signature,
+                &secret,
+            ));
+        }
         let guard = self.verify_result.lock().expect("lock poisoned");
         Ok(guard.unwrap_or(piteka_ports::github::WebhookSignatureResult::Invalid))
     }

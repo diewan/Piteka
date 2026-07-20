@@ -61,3 +61,36 @@ Run the offline checks from the Piteka repository root:
 ```bash
 python3 -m unittest discover -s tests/e2e -p 'test_*.py'
 ```
+
+## Guarded live transport check
+
+`controlled_demo_dispatch` exercises real GitHub App JWT authentication,
+installation-token exchange, and the Deployments API. It refuses to run unless
+`PITEKA_CONFIRM_LIVE_DEMO` exactly names the disposable repository. Supply the
+private key by file path; never put its contents in an environment variable or
+commit it. The remaining required variables are listed by running the binary
+without arguments:
+
+```bash
+cargo run -p piteka-github --bin controlled_demo_dispatch
+```
+
+This utility validates the provider transport only. It does not manufacture a
+mandate or approval and must not be represented as H-02 evidence. A qualifying
+H-02 run must enter through Piteka's persisted approval/reservation path and
+retain authenticated webhook and receipt evidence.
+
+`controlled_demo_flow` exercises the demo application state machine before
+crossing the provider boundary: propose, approve the exact intent, insert an
+issued mandate, reserve it with CAS, dispatch, and consume only after GitHub
+acceptance. It requires the same provider variables plus
+`PITEKA_DEMO_JOURNAL`, an absolute output path for its run journal:
+
+```bash
+cargo run -p piteka --bin controlled_demo_flow
+```
+
+The flow uses the repository's documented demo identity and in-memory stores;
+the journal makes the observed run durable, but does not turn those stores into
+production persistence. Authenticated webhook receipt evidence remains a
+separate required artifact.

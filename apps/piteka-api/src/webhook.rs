@@ -34,13 +34,14 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use piteka_application::{IngestionOutcome, SystemClock};
+use piteka_application::{IngestionOutcome, SystemClock, WebhookEventProcessor};
 use piteka_ports::github::{
     GitHubAppPort, GitHubWebhookPayload, GitHubWebhookSecret, WebhookSignatureResult,
 };
 
 use crate::error::ApiError;
 use crate::{MockGitHubAdapter, MockWebhookProcessor};
+use piteka_storage::ports::{AuditLog, WebhookReceiptStore};
 
 // ---------------------------------------------------------------------------
 // State
@@ -51,17 +52,23 @@ pub type WebhookState = crate::webhook::WebhookStateConcrete;
 
 /// State available to the webhook handler.
 #[derive(Clone)]
-pub struct WebhookStateConcrete {
+pub struct WebhookStateConcrete<
+    P = MockWebhookProcessor,
+    W = std::sync::Arc<piteka_storage::memory::InMemoryWebhookReceiptStore>,
+    A = std::sync::Arc<piteka_storage::memory::InMemoryAuditLog>,
+    G = MockGitHubAdapter,
+> where
+    P: WebhookEventProcessor,
+    W: WebhookReceiptStore,
+    A: AuditLog,
+    G: GitHubAppPort,
+{
     /// The webhook ingestion use case.
-    pub ingestion: piteka_application::WebhookIngestionUseCase<
-        MockWebhookProcessor,
-        std::sync::Arc<piteka_storage::memory::InMemoryWebhookReceiptStore>,
-        std::sync::Arc<piteka_storage::memory::InMemoryAuditLog>,
-    >,
+    pub ingestion: piteka_application::WebhookIngestionUseCase<P, W, A>,
     /// The clock for time-dependent operations.
     pub clock: SystemClock,
     /// Adapter used to resolve the configured secret and verify the signature.
-    pub github: std::sync::Arc<MockGitHubAdapter>,
+    pub github: std::sync::Arc<G>,
     /// Reference to the configured webhook signing secret.
     pub webhook_secret: GitHubWebhookSecret,
 }
@@ -89,10 +96,16 @@ pub struct WebhookStateConcrete {
 /// | `400 Bad Request` | Missing required headers. |
 /// | `401 Unauthorized` | Invalid or missing signature. |
 /// | `500 Internal Server Error` | Storage or processing error. |
-pub async fn handle_webhook(
-    State(state): State<WebhookStateConcrete>,
+pub async fn handle_webhook<P, W, A, G>(
+    State(state): State<WebhookStateConcrete<P, W, A, G>>,
     request: Request,
-) -> Response {
+) -> Response
+where
+    P: WebhookEventProcessor + Clone + 'static,
+    W: WebhookReceiptStore + Clone + 'static,
+    A: AuditLog + Clone + 'static,
+    G: GitHubAppPort + 'static,
+{
     let headers = request.headers().clone();
 
     // Step 1: Validate required headers.
@@ -187,6 +200,13 @@ pub async fn handle_webhook(
         }
     }
 
+    // GitHub sends `ping` when the App webhook is created or updated. It is
+    // authenticated above but is connectivity metadata, not deployment
+    // evidence, so acknowledge it without entering the ingestion pipeline.
+    if event_type == "ping" {
+        return (StatusCode::OK, Json(WebhookResponse::ping(delivery_id))).into_response();
+    }
+
     // Step 4 & 5: Ingest (dedup + raw digest recording).
     let outcome = match state.ingestion.ingest(&payload, &state.clock).await {
         Ok(o) => o,
@@ -261,6 +281,15 @@ pub struct WebhookResponse {
 }
 
 impl WebhookResponse {
+    fn ping(delivery_id: String) -> Self {
+        Self {
+            delivery_id,
+            outcome: "ping".to_string(),
+            out_of_order: None,
+            raw_digest_hex: None,
+        }
+    }
+
     fn duplicate(delivery_id: String) -> Self {
         Self {
             delivery_id,
@@ -349,6 +378,31 @@ mod tests {
         .unwrap();
         assert_eq!(body["delivery_id"], "delivery-1");
         assert_eq!(body["outcome"], "processed");
+    }
+
+    #[tokio::test]
+    async fn authenticated_ping_is_acknowledged_without_recording_evidence() {
+        let ports = crate::TestPorts::new();
+        *ports.github_adapter.verify_result.lock().unwrap() = Some(WebhookSignatureResult::Valid);
+        let ping = Request::builder()
+            .method("POST")
+            .uri("/api/v1/webhooks/github")
+            .header("X-GitHub-Delivery", "ping-delivery")
+            .header("X-GitHub-Event", "ping")
+            .header("X-Hub-Signature-256", format!("sha256={}", "00".repeat(32)))
+            .body(Body::from(r#"{"zen":"Keep it logically awesome."}"#))
+            .unwrap();
+        let response = router(&ports).call(ping).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            ports
+                .webhook_receipt_store
+                .get("ping-delivery")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(ports.webhook_processor.recorded.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

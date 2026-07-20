@@ -63,10 +63,7 @@ impl Clock for StepClock {
     }
 }
 
-fn authority(
-    clock: &StepClock,
-    key: u8,
-) -> SessionAuthority<FoldSigner, StepClock> {
+fn authority(clock: &StepClock, key: u8) -> SessionAuthority<FoldSigner, StepClock> {
     SessionAuthority::new(
         FoldSigner { key },
         clock.clone(),
@@ -143,7 +140,10 @@ fn authenticate_rejects_a_forged_signature() {
         genuine.claims().clone(),
         forger.sign(&genuine.claims().signing_bytes()),
     );
-    assert_eq!(issuer.authenticate(&forged), Err(AuthError::InvalidSignature));
+    assert_eq!(
+        issuer.authenticate(&forged),
+        Err(AuthError::InvalidSignature)
+    );
 }
 
 #[test]

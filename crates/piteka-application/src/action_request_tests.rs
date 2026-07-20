@@ -3,16 +3,16 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::action_request::{
-    ActionRequestUseCase, ActionRequestUseCaseError, ActionRequestPorts, Approved,
-};
 use crate::Clock;
+use crate::action_request::{
+    ActionRequestPorts, ActionRequestUseCase, ActionRequestUseCaseError, Approved,
+};
 use piteka_domain::UserId;
+use piteka_storage::ActionRequestStatus;
 use piteka_storage::memory::{
     InMemoryActionRequestStore, InMemoryApprovalDecisionStore, InMemoryAuditLog,
 };
 use piteka_storage::ports::{ActionRequestStore, ApprovalDecisionStore, AuditLog};
-use piteka_storage::ActionRequestStatus;
 
 /// Deterministic test clock.
 #[derive(Clone)]
@@ -99,7 +99,10 @@ async fn propose_creates_a_pending_request_and_audits() {
 
     assert_eq!(result.request.status, ActionRequestStatus::Pending);
     assert_eq!(result.request.request_id, "req-1");
-    assert_eq!(result.request.intent_id_hex, Some("intent-abc123".to_string()));
+    assert_eq!(
+        result.request.intent_id_hex,
+        Some("intent-abc123".to_string())
+    );
 
     let events = uc.audit_log().recent(10).await.unwrap();
     assert_eq!(events.len(), 1);
@@ -134,7 +137,10 @@ async fn approve_transitions_pending_to_approved_with_cas() {
 
     assert_eq!(result.request.status, ActionRequestStatus::Approved);
     assert_eq!(result.decision.decision, "approved");
-    assert_eq!(result.decision.intent_id_hex, Some("intent-abc123".to_string()));
+    assert_eq!(
+        result.decision.intent_id_hex,
+        Some("intent-abc123".to_string())
+    );
     assert_eq!(result.decision.decided_by, "approver");
 
     let events = uc.audit_log().recent(10).await.unwrap();
@@ -151,10 +157,7 @@ async fn approve_rejects_non_pending_request() {
     uc.propose("req-1", requester(), None).await.unwrap();
     uc.reject("req-1", approver(), None, 1).await.unwrap();
 
-    let result = uc
-        .approve("req-1", approver(), None, 1)
-        .await
-        .unwrap_err();
+    let result = uc.approve("req-1", approver(), None, 1).await.unwrap_err();
 
     assert!(matches!(
         result,
@@ -228,10 +231,7 @@ async fn reject_nonexistent_request_fails() {
         .await
         .unwrap_err();
 
-    assert!(matches!(
-        result,
-        ActionRequestUseCaseError::NotFound(_)
-    ));
+    assert!(matches!(result, ActionRequestUseCaseError::NotFound(_)));
 }
 
 #[tokio::test]
@@ -333,11 +333,19 @@ async fn approve_with_different_intent_digest_still_succeeds() {
 
     // Approver reviews and approves with the intent they saw.
     let Approved { decision, .. } = uc
-        .approve("req-1", approver(), Some("intent-reviewed-xyz".to_string()), 1)
+        .approve(
+            "req-1",
+            approver(),
+            Some("intent-reviewed-xyz".to_string()),
+            1,
+        )
         .await
         .unwrap();
 
-    assert_eq!(decision.intent_id_hex, Some("intent-reviewed-xyz".to_string()));
+    assert_eq!(
+        decision.intent_id_hex,
+        Some("intent-reviewed-xyz".to_string())
+    );
 }
 
 #[tokio::test]
@@ -350,10 +358,7 @@ async fn revoked_request_cannot_be_approved_or_rejected() {
     uc.revoke("req-1", approver(), 2).await.unwrap();
 
     // Cannot approve a revoked request.
-    let result = uc
-        .approve("req-1", approver(), None, 3)
-        .await
-        .unwrap_err();
+    let result = uc.approve("req-1", approver(), None, 3).await.unwrap_err();
     assert!(matches!(
         result,
         ActionRequestUseCaseError::InvalidTransition {
@@ -363,10 +368,7 @@ async fn revoked_request_cannot_be_approved_or_rejected() {
     ));
 
     // Cannot reject a revoked request.
-    let result = uc
-        .reject("req-1", approver(), None, 3)
-        .await
-        .unwrap_err();
+    let result = uc.reject("req-1", approver(), None, 3).await.unwrap_err();
     assert!(matches!(
         result,
         ActionRequestUseCaseError::InvalidTransition {

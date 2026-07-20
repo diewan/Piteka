@@ -32,7 +32,7 @@
 //! Execution credentials (GitHub private key) never leave the adapter layer.
 //! The raw reservation token is secret and is never written to exported bundles.
 
-use piteka_storage::model::{ExecutionAttempt, ExecutionAttemptState, ReceiptOutcome};
+use piteka_storage::model::{ExecutionAttempt, ExecutionAttemptState};
 use piteka_storage::ports::{
     ActionRequestStore, AuditLog, ExecutionAttemptStore, MandateProjectionStore,
     ReceiptProjectionStore,
@@ -477,7 +477,7 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
         &self,
         attempt_id_hex: &str,
         mandate_id_hex: &str,
-        intent_id_hex: &str,
+        _intent_id_hex: &str,
         provider_accepted: bool,
         deployment_id: Option<u64>,
         executor_identity: &str,
@@ -514,25 +514,8 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
 
             match cas_result {
                 CasOutcome::Applied { .. } => {
-                    // Record the receipt.
-                    let receipt_id_hex = format!("rcpt-{}", attempt_id_hex);
-                    self.ports
-                        .receipt_store()
-                        .insert(piteka_storage::ReceiptProjection {
-                            receipt_id_hex,
-                            mandate_id_hex: mandate_id_hex.to_string(),
-                            intent_id_hex: intent_id_hex.to_string(),
-                            attempt_id_hex: attempt_id_hex.to_string(),
-                            outcome: ReceiptOutcome::Succeeded,
-                            created_at_unix_seconds: now,
-                            dispatch_evidence_refs: vec![],
-                            target_evidence_refs: vec![],
-                            evidence_gaps: vec![],
-                            canonical_bytes: None,
-                        })
-                        .await?;
-
-                    // Audit.
+                    // Receipt production is deferred until authenticated
+                    // provider outcome evidence arrives via webhook.
                     self.ports
                         .audit_log()
                         .append(piteka_storage::AuditEvent {
@@ -572,25 +555,9 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
 
             match cas_result {
                 CasOutcome::Applied { .. } => {
-                    // Record the receipt with Unknown outcome.
-                    let receipt_id_hex = format!("rcpt-{}", attempt_id_hex);
-                    self.ports
-                        .receipt_store()
-                        .insert(piteka_storage::ReceiptProjection {
-                            receipt_id_hex,
-                            mandate_id_hex: mandate_id_hex.to_string(),
-                            intent_id_hex: intent_id_hex.to_string(),
-                            attempt_id_hex: attempt_id_hex.to_string(),
-                            outcome: ReceiptOutcome::Unknown,
-                            created_at_unix_seconds: now,
-                            dispatch_evidence_refs: vec![],
-                            target_evidence_refs: vec![],
-                            evidence_gaps: vec![],
-                            canonical_bytes: None,
-                        })
-                        .await?;
-
-                    // Audit.
+                    // No receipt is fabricated for an ambiguous boundary.
+                    // Reconciliation or authenticated provider evidence owns
+                    // subsequent receipt production.
                     self.ports
                         .audit_log()
                         .append(piteka_storage::AuditEvent {

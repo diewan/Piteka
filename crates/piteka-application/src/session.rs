@@ -184,7 +184,10 @@ impl core::fmt::Display for AuthError {
             Self::UnknownSubject(user) => write!(f, "unknown subject `{}`", user.as_str()),
             Self::InvalidSignature => f.write_str("session signature did not verify"),
             Self::AlgorithmMismatch { expected, found } => {
-                write!(f, "session algorithm {found:?} does not match signer {expected:?}")
+                write!(
+                    f,
+                    "session algorithm {found:?} does not match signer {expected:?}"
+                )
             }
             Self::Expired {
                 expires_at_unix_seconds,
@@ -200,8 +203,14 @@ impl core::fmt::Display for AuthError {
                 f,
                 "session not valid until {issued_at_unix_seconds}, now {now_unix_seconds}"
             ),
-            Self::RoleMismatch { configured, claimed } => {
-                write!(f, "claimed role {claimed:?} but member holds {configured:?}")
+            Self::RoleMismatch {
+                configured,
+                claimed,
+            } => {
+                write!(
+                    f,
+                    "claimed role {claimed:?} but member holds {configured:?}"
+                )
             }
             Self::CrossOrganization => f.write_str("session organization does not match member"),
             Self::Unauthorized(capability) => {
@@ -279,10 +288,7 @@ impl<S: SessionSigner, C: Clock> SessionAuthority<S, C> {
     /// Returns the matching [`AuthError`] variant for an algorithm mismatch,
     /// an invalid signature, an expired or not-yet-valid window, an unknown
     /// subject, or a role/organization that disagrees with the directory.
-    pub fn authenticate(
-        &self,
-        session: &SignedSession,
-    ) -> Result<AuthenticatedSession, AuthError> {
+    pub fn authenticate(&self, session: &SignedSession) -> Result<AuthenticatedSession, AuthError> {
         let expected_algorithm = self.signer.algorithm();
         if session.signature.algorithm() != expected_algorithm {
             return Err(AuthError::AlgorithmMismatch {

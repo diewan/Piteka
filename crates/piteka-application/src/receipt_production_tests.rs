@@ -30,6 +30,23 @@ fn parse_deployment_status_accepts_github_rfc3339_timestamp() {
 }
 
 #[test]
+fn parse_deployment_status_accepts_live_github_envelope() {
+    let payload = br#"{
+      "deployment":{"id":5519643441},
+      "deployment_status":{
+        "state":"success",
+        "description":"Piteka deployment consumer terminal status",
+        "target_url":"https://github.com/zorvan/piteka-demo/actions/runs/29732092691",
+        "updated_at":"2026-07-20T09:36:51Z"
+      }
+    }"#;
+    let event = parse_deployment_status(payload).expect("live GitHub envelope should parse");
+    assert_eq!(event.deployment_id, 5_519_643_441);
+    assert_eq!(event.state, "success");
+    assert_eq!(event.updated_at, 1_784_540_211);
+}
+
+#[test]
 fn parse_deployment_status_rejects_negative_timestamp() {
     let payload = br#"{"state":"success","deployment":{"id":42},"updated_at":-1}"#;
     assert!(parse_deployment_status(payload).is_none());

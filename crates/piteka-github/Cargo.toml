@@ -53,7 +53,7 @@ async-trait.workspace = true
 piteka-domain.workspace = true
 piteka-ports.workspace = true
 piteka-parwana.workspace = true
-sha2 = "0.10"
+sha2 = { version = "0.10", features = ["oid"] }
 hmac = "0.12"
 hex = "0.4"
 thiserror = "2"
@@ -64,9 +64,10 @@ rand = "0.8"
 time = { version = "0.3", features = ["macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true }
 
 [lints.rust]
 unsafe_code = "forbid"

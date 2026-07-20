@@ -44,7 +44,11 @@ impl ContentDigest {
     /// Returns `None` when `value` is not 64 lower-case hex characters.
     #[must_use]
     pub fn from_hex(value: &str) -> Option<Self> {
-        if value.len() != 64 || !value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+        if value.len() != 64
+            || !value
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
             return None;
         }
         let mut out = [0u8; 32];

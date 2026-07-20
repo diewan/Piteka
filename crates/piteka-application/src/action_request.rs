@@ -89,7 +89,11 @@ impl core::fmt::Display for ActionRequestUseCaseError {
             Self::Storage(err) => write!(f, "storage error: {}", err),
             Self::NotFound(id) => write!(f, "action request `{}` not found", id),
             Self::InvalidTransition { current, attempted } => {
-                write!(f, "cannot {} from status {:?} for action request", attempted, current)
+                write!(
+                    f,
+                    "cannot {} from status {:?} for action request",
+                    attempted, current
+                )
             }
             Self::Conflict {
                 expected_version,
@@ -173,10 +177,7 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
             created_at_unix_seconds: now,
         };
 
-        self.ports
-            .request_store()
-            .insert(request.clone())
-            .await?;
+        self.ports.request_store().insert(request.clone()).await?;
 
         self.ports
             .audit_log()
@@ -252,10 +253,7 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
                     decided_at_unix_seconds: now,
                 };
 
-                self.ports
-                    .decision_store()
-                    .insert(decision.clone())
-                    .await?;
+                self.ports.decision_store().insert(decision.clone()).await?;
 
                 self.ports
                     .audit_log()
@@ -287,15 +285,11 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
                     decision,
                 })
             }
-            CasOutcome::Conflict { current_version } => {
-                Err(ActionRequestUseCaseError::Conflict {
-                    expected_version,
-                    current_version,
-                })
-            }
-            CasOutcome::Missing => {
-                Err(ActionRequestUseCaseError::NotFound(request_id.to_string()))
-            }
+            CasOutcome::Conflict { current_version } => Err(ActionRequestUseCaseError::Conflict {
+                expected_version,
+                current_version,
+            }),
+            CasOutcome::Missing => Err(ActionRequestUseCaseError::NotFound(request_id.to_string())),
         }
     }
 
@@ -349,10 +343,7 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
                     decided_at_unix_seconds: now,
                 };
 
-                self.ports
-                    .decision_store()
-                    .insert(decision.clone())
-                    .await?;
+                self.ports.decision_store().insert(decision.clone()).await?;
 
                 self.ports
                     .audit_log()
@@ -381,15 +372,11 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
                     decision,
                 })
             }
-            CasOutcome::Conflict { current_version } => {
-                Err(ActionRequestUseCaseError::Conflict {
-                    expected_version,
-                    current_version,
-                })
-            }
-            CasOutcome::Missing => {
-                Err(ActionRequestUseCaseError::NotFound(request_id.to_string()))
-            }
+            CasOutcome::Conflict { current_version } => Err(ActionRequestUseCaseError::Conflict {
+                expected_version,
+                current_version,
+            }),
+            CasOutcome::Missing => Err(ActionRequestUseCaseError::NotFound(request_id.to_string())),
         }
     }
 
@@ -454,17 +441,15 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
                     .await?
                     .expect("CAS applied but request vanished");
 
-                Ok(Revoked { request: updated_request })
-            }
-            CasOutcome::Conflict { current_version } => {
-                Err(ActionRequestUseCaseError::Conflict {
-                    expected_version,
-                    current_version,
+                Ok(Revoked {
+                    request: updated_request,
                 })
             }
-            CasOutcome::Missing => {
-                Err(ActionRequestUseCaseError::NotFound(request_id.to_string()))
-            }
+            CasOutcome::Conflict { current_version } => Err(ActionRequestUseCaseError::Conflict {
+                expected_version,
+                current_version,
+            }),
+            CasOutcome::Missing => Err(ActionRequestUseCaseError::NotFound(request_id.to_string())),
         }
     }
 
@@ -473,10 +458,7 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
     /// # Errors
     ///
     /// Returns a [`StorageError`] on backend failure.
-    pub async fn get_request(
-        &self,
-        request_id: &str,
-    ) -> StorageResult<Option<ActionRequest>> {
+    pub async fn get_request(&self, request_id: &str) -> StorageResult<Option<ActionRequest>> {
         self.ports.request_store().get(request_id).await
     }
 
@@ -494,10 +476,7 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
     /// # Errors
     ///
     /// Returns a [`StorageError`] on backend failure.
-    pub async fn get_decisions(
-        &self,
-        request_id: &str,
-    ) -> StorageResult<Vec<ApprovalDecision>> {
+    pub async fn get_decisions(&self, request_id: &str) -> StorageResult<Vec<ApprovalDecision>> {
         self.ports.decision_store().by_request(request_id).await
     }
 }
