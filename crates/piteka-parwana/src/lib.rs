@@ -41,7 +41,13 @@ pub mod protocol {
         ProfileId, ProfileRegistry, ProtocolVersion, RequiredContexts, RequiredContextsWire,
         VerificationContext, default_registry, github_deployment_descriptor,
     };
+    pub use csv_sdk::accountability::{
+        CommitmentAnchorRecord, EVIDENCE_CSV_SEAL_COMMITMENT_ANCHOR,
+        EVIDENCE_CSV_SEAL_CONSUMPTION_RECORD, SealConsumptionRecord, SingleUseAnchorAssessment,
+    };
 }
+
+pub mod anchor;
 
 use csv_sdk::accountability;
 
@@ -55,7 +61,7 @@ use protocol::{
 /// `=0.1.5` requirement on `csv-sdk`. Kept as a human-facing constant so the pin
 /// is auditable from a running Piteka; the binding compatibility check lives in
 /// [`verify_contract_versions`].
-pub const PINNED_CONTRACT_VERSION: &str = "0.1.6";
+pub const PINNED_CONTRACT_VERSION: &str = "0.1.7";
 
 /// Accountability protocol version (major, minor) this adapter is built against.
 pub const EXPECTED_PROTOCOL_VERSION: (u16, u16) = (0, 1);

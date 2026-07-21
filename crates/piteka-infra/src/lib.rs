@@ -1,5 +1,9 @@
 #![forbid(unsafe_code)]
 
+pub mod anchor;
+
+pub use anchor::LocalCsvSealAnchor;
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use piteka_application::Clock;

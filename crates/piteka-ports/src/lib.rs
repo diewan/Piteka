@@ -22,8 +22,12 @@
 //! stable references stored in the Piteka database and used in mandate
 //! parameters — not display names.
 
+pub mod anchor;
 pub mod github;
 
+pub use anchor::{
+    AnchorError, AnchorPort, AnchorRef, ConsumptionProof, Digest32, LOCAL_SEAL_BACKEND,
+};
 pub use github::{
     GitHubAppPort, GitHubEnvironmentId, GitHubInstallationId, GitHubRepositoryId,
     GitHubSecretReference, GitHubWebhookPayload, GitHubWebhookSecret,

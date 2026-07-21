@@ -1,7 +1,7 @@
 //! Positive and adversarial coverage for the Parwana adapter boundary.
 
 use super::{
-    AdapterError, ContractVersions, ParwanaContract, PINNED_CONTRACT_VERSION,
+    AdapterError, ContractVersions, PINNED_CONTRACT_VERSION, ParwanaContract,
     verify_contract_versions,
 };
 use crate::protocol::{
@@ -44,7 +44,7 @@ fn valid_intent() -> ActionIntent {
 #[test]
 fn bind_reports_the_pinned_contract() {
     let contract = ParwanaContract::bind().expect("linked SDK matches the pinned contract");
-    assert_eq!(contract.contract_version(), "0.1.6");
+    assert_eq!(contract.contract_version(), "0.1.7");
     assert_eq!(contract.contract_version(), PINNED_CONTRACT_VERSION);
     assert_eq!(contract.versions(), ContractVersions::expected());
 }

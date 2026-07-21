@@ -13,6 +13,7 @@ rust-version.workspace = true
 # only the explicitly selected Accountability capability is needed.
 [dependencies]
 csv-sdk = { version = "=0.1.5", path = "../../../parwana/csv-sdk", default-features = false, features = ["std", "accountability"] }
+piteka-ports.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"

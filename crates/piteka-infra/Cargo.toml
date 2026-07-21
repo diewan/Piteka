@@ -7,6 +7,11 @@ rust-version.workspace = true
 
 [dependencies]
 piteka-application.workspace = true
+piteka-ports.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }
 
 [lints.rust]
 unsafe_code = "forbid"
