@@ -46,8 +46,8 @@
 
 use piteka_parwana::ParwanaContract;
 use piteka_parwana::protocol::{
-    ActionIntent, ActionIntentWire, GateProfileId, GitHubDeploymentIntentV1,
-    GitHubDeploymentIntentV1Wire, IntentError, RequiredContexts,
+    ActionIntent, ActionIntentWire, GitHubDeploymentIntentV1, GitHubDeploymentIntentV1Wire,
+    IntentError, ProfileRegistry, RequiredContexts, default_registry, github_deployment_descriptor,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -336,14 +336,18 @@ impl GitHubIntentNormalizer {
             _ => NormalizeError::InvalidContextsMode(format!("{e:?}")),
         })?;
 
-        // Construct the canonical ActionIntent through Parwana's sole serializer.
-        let intent = ActionIntent::github_deployment(
-            gate_policy_id,
+        // Construct the canonical ActionIntent by resolving the GitHub deployment
+        // profile from the shared registry and building through the generic
+        // ActionIntent::new path — Piteka speaks registered profiles, not a hardcoded
+        // constructor (Master Plan §5.10, §36).
+        let registry = default_registry();
+        let intent = build_github_action_intent(
+            &registry,
+            &profile,
             requested_by,
             requested_at,
             request_nonce,
             context_commitments,
-            profile.clone(),
         )
         .map_err(|e| match e {
             IntentError::EmptyField(f) => NormalizeError::EmptyField(f.to_string()),
@@ -553,16 +557,43 @@ pub fn build_payload_commitment(
     // For standalone use, we return a placeholder that the caller must fill
     // by constructing a dummy intent.
     let nonce = [0u8; 32];
-    let intent = ActionIntent::github_deployment(
-        GateProfileId::from_digest([0u8; 32]),
-        vec![0u8],
-        0,
-        nonce,
-        vec![],
-        profile.clone(),
-    )
-    .map_err(|_| NormalizeError::ParwanaError("intent construction failed".to_string()))?;
+    let registry = default_registry();
+    let intent = build_github_action_intent(&registry, profile, vec![0u8], 0, nonce, vec![])
+        .map_err(|_| NormalizeError::ParwanaError("intent construction failed".to_string()))?;
     Ok(intent.parameters_commitment)
+}
+
+/// Builds a canonical [`ActionIntent`] for the GitHub deployment profile.
+///
+/// Resolves the descriptor and codec from the shared [`ProfileRegistry`] by stable profile
+/// id and constructs the intent through the generic [`ActionIntent::new`] path. This is the
+/// concrete decoupling that lets Piteka speak registered profiles rather than depend on a
+/// GitHub-specific constructor (Master Plan §5.10, §36).
+fn build_github_action_intent(
+    registry: &ProfileRegistry,
+    profile: &GitHubDeploymentIntentV1,
+    requested_by: Vec<u8>,
+    requested_at: u64,
+    request_nonce: [u8; 32],
+    context_commitments: Vec<[u8; 32]>,
+) -> Result<ActionIntent, IntentError> {
+    let profile_id = github_deployment_descriptor().profile_id;
+    let descriptor = registry
+        .descriptor(&profile_id)
+        .ok_or(IntentError::UnregisteredProfile)?;
+    let codec = registry
+        .codec(&profile_id)
+        .ok_or(IntentError::UnregisteredProfile)?;
+    let profile_bytes = profile.canonical_bytes()?;
+    ActionIntent::new(
+        descriptor,
+        codec,
+        profile_bytes,
+        requested_by,
+        requested_at,
+        request_nonce,
+        context_commitments,
+    )
 }
 
 /// A normalized intent ready for serialization to the JSON wire format.

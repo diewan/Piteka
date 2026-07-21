@@ -5,8 +5,8 @@ use super::{
     verify_contract_versions,
 };
 use crate::protocol::{
-    AccountabilityObjectKind, ActionIntent, ActionIntentWire, GateProfileId,
-    GitHubDeploymentIntentV1, RequiredContexts,
+    AccountabilityObjectKind, ActionIntent, ActionIntentWire, GitHubDeploymentIntentV1,
+    RequiredContexts,
 };
 
 /// A full, lower-case hexadecimal SHA-1 (40 characters).
@@ -32,7 +32,6 @@ fn valid_intent() -> ActionIntent {
         deployment_gate_policy_digest: gate,
     };
     ActionIntent::github_deployment(
-        GateProfileId::from_digest([0x22; 32]),
         b"requester-identity".to_vec(),
         1_700_000_000,
         [0x33; 32],
@@ -45,7 +44,7 @@ fn valid_intent() -> ActionIntent {
 #[test]
 fn bind_reports_the_pinned_contract() {
     let contract = ParwanaContract::bind().expect("linked SDK matches the pinned contract");
-    assert_eq!(contract.contract_version(), "0.1.5");
+    assert_eq!(contract.contract_version(), "0.1.6");
     assert_eq!(contract.contract_version(), PINNED_CONTRACT_VERSION);
     assert_eq!(contract.versions(), ContractVersions::expected());
 }
@@ -137,24 +136,51 @@ fn wire_intent_round_trips_and_stays_byte_identical() {
 }
 
 #[test]
-fn decode_rejects_a_tampered_deployment_ref() {
+fn decode_rejects_a_tampered_deployment_profile() {
     let contract = ParwanaContract::bind().unwrap();
     let mut wire = ActionIntentWire::from(&valid_intent());
 
-    // An agent-side tamper: point the deployment ref away from the approved SHA.
-    wire.profile.exact_ref = "ffffffffffffffffffffffffffffffffffffffff".to_string();
+    // An agent-side tamper: swap in a different approved SHA's profile bytes while
+    // leaving the committed target and parameters commitment untouched. The opaque
+    // envelope is re-verified against the registered codec, so the swap is rejected.
+    let tampered_profile = GitHubDeploymentIntentV1 {
+        required_contexts: RequiredContexts::AllSubmitted,
+        repository_id: 42,
+        repository_owner: "diewan".to_string(),
+        repository_name: "piteka".to_string(),
+        commit_sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+        exact_ref: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+        environment_id: 7,
+        environment_name: "production".to_string(),
+        payload_commitment: [0x11; 32],
+        artifact_digest: None,
+        deployment_gate_policy_digest: RequiredContexts::AllSubmitted.gate_policy_id().unwrap(),
+    };
+    tampered_profile
+        .validate()
+        .expect("tampered profile is itself structurally valid");
+    let alt = ActionIntent::github_deployment(
+        b"requester-identity".to_vec(),
+        1_700_000_000,
+        [0x33; 32],
+        vec![[0x44; 32]],
+        tampered_profile.clone(),
+    )
+    .unwrap();
+    wire.profile_bytes_hex = ActionIntentWire::from(&alt).profile_bytes_hex;
 
     match contract.decode_action_intent(wire) {
         Err(AdapterError::InvalidIntent(_)) => {}
-        other => panic!("tampered ref must be rejected, got {other:?}"),
+        other => panic!("tampered profile must be rejected, got {other:?}"),
     }
 }
 
 #[test]
-fn decode_rejects_an_unsupported_task() {
+fn decode_rejects_noncanonical_profile_bytes() {
     let contract = ParwanaContract::bind().unwrap();
     let mut wire = ActionIntentWire::from(&valid_intent());
-    wire.profile.task = "release".to_string();
+    // A trailing byte makes the profile encoding non-canonical; decode fails closed.
+    wire.profile_bytes_hex.push_str("00");
 
     assert!(matches!(
         contract.decode_action_intent(wire),

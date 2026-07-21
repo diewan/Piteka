@@ -37,8 +37,9 @@ pub mod protocol {
         ActionIntent, ActionIntentWire, ActionMandate, AssuranceProfile,
         CanonicalAccountabilityObjectWire, DisputeBundle, EvidenceNode, ExecutionAttempt,
         ExecutionReceipt, GateProfileId, GitHubDeploymentIntentV1, GitHubDeploymentIntentV1Wire,
-        IntentError, MandateSignatureEnvelope, ObjectVersion, ProtocolVersion, RequiredContexts,
-        RequiredContextsWire, VerificationContext,
+        IntentError, MandateSignatureEnvelope, ObjectVersion, ProfileCodec, ProfileDescriptor,
+        ProfileId, ProfileRegistry, ProtocolVersion, RequiredContexts, RequiredContextsWire,
+        VerificationContext, default_registry, github_deployment_descriptor,
     };
 }
 
@@ -54,7 +55,7 @@ use protocol::{
 /// `=0.1.5` requirement on `csv-sdk`. Kept as a human-facing constant so the pin
 /// is auditable from a running Piteka; the binding compatibility check lives in
 /// [`verify_contract_versions`].
-pub const PINNED_CONTRACT_VERSION: &str = "0.1.5";
+pub const PINNED_CONTRACT_VERSION: &str = "0.1.6";
 
 /// Accountability protocol version (major, minor) this adapter is built against.
 pub const EXPECTED_PROTOCOL_VERSION: (u16, u16) = (0, 1);

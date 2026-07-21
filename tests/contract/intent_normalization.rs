@@ -18,8 +18,8 @@ use piteka_github::intent::{
 };
 use piteka_parwana::ParwanaContract;
 use piteka_parwana::protocol::{
-    ActionIntent, ActionIntentWire, GateProfileId, GitHubDeploymentIntentV1,
-    GitHubDeploymentIntentV1Wire, RequiredContexts,
+    ActionIntent, ActionIntentWire, GitHubDeploymentIntentV1, GitHubDeploymentIntentV1Wire,
+    RequiredContexts,
 };
 use piteka_ports::github::{
     GitHubEnvironmentId, GitHubEnvironmentName, GitHubInstallationContext, GitHubInstallationId,
@@ -201,12 +201,20 @@ fn golden_wire_round_trip_preserves_fields() {
 
     // Verify wire fields match the intent.
     assert_eq!(wire.action_type, "github.deployment");
-    assert_eq!(wire.profile.commit_sha, TEST_COMMIT);
-    assert_eq!(wire.profile.exact_ref, TEST_COMMIT);
-    assert_eq!(wire.profile.task, "deploy");
-    assert!(!wire.profile.auto_merge);
-    assert!(wire.profile.production_environment);
-    assert!(!wire.profile.transient_environment);
+    assert_eq!(
+        wire.profile_id,
+        "org.diewan.accountability.github-deployment.intent.v1"
+    );
+    // The opaque profile bytes decode back to the exact deployment profile, with the
+    // fixed controls intact.
+    let decoded = GitHubDeploymentIntentV1::from_canonical_bytes(&normalized.intent.profile_bytes)
+        .expect("wire carries a canonical github profile");
+    assert_eq!(decoded.commit_sha, TEST_COMMIT);
+    assert_eq!(decoded.exact_ref, TEST_COMMIT);
+    assert_eq!(decoded.task(), "deploy");
+    assert!(!decoded.auto_merge());
+    assert!(decoded.production_environment());
+    assert!(!decoded.transient_environment());
 }
 
 #[test]
