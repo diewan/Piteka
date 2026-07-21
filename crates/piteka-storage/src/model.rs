@@ -17,6 +17,27 @@ pub struct ProtocolObjectRecord {
     pub bytes: Vec<u8>,
 }
 
+/// A preserved Single-Use Seal consumption proof for one mandate (Phase B, §5.9).
+///
+/// Written off the dispatch hot path by the local seal backing and immutable once
+/// stored. It corroborates that the mandate's single use was enforced independently of
+/// the private Postgres reservation: `nullifier_hex` is the mandate's reservation-token
+/// digest and `commitment_hex` is the authorized intent id. A dispute bundle carries it
+/// as a Parwana `SealConsumptionRecord` that an offline verifier re-checks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SealConsumptionProofRecord {
+    /// Mandate the proof corroborates, lower-case hex. Primary key.
+    pub mandate_id_hex: String,
+    /// Identifier of the consumed single-use seal, lower-case hex.
+    pub seal_id_hex: String,
+    /// Consumption nullifier (the mandate's reservation-token digest), lower-case hex.
+    pub nullifier_hex: String,
+    /// Commitment the seal bound at issue (the authorized intent id), lower-case hex.
+    pub commitment_hex: String,
+    /// Stable identifier of the backing that produced the proof.
+    pub anchor_backend: String,
+}
+
 /// The mutable projection of a single-use mandate's live state.
 ///
 /// The authoritative live state is the Piteka database row; `version` drives the

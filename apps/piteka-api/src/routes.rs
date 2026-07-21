@@ -10,7 +10,7 @@ use piteka_application::ActionRequestUseCase;
 use piteka_application::bundle_export::export_manifest_bytes;
 use piteka_storage::postgres::{
     PgAuditLog, PgEvidenceNodeStore, PgExecutionAttemptStore, PgMandateProjectionStore,
-    PgReceiptProjectionStore,
+    PgReceiptProjectionStore, PgSealConsumptionStore,
 };
 use piteka_storage::{
     AuditLog, EvidenceNodeRecord, EvidenceNodeStore, EvidenceSource, ExecutionAttempt,
@@ -110,6 +110,7 @@ pub async fn build_live_webhook_router(
 pub struct ReadState {
     receipts: PgReceiptProjectionStore,
     evidence: PgEvidenceNodeStore,
+    seals: PgSealConsumptionStore,
     mandates: PgMandateProjectionStore,
     attempts: PgExecutionAttemptStore,
     audit: PgAuditLog,
@@ -129,6 +130,7 @@ pub async fn build_live_read_router(
     let state = ReadState {
         receipts: PgReceiptProjectionStore::new(pool.clone()),
         evidence: PgEvidenceNodeStore::new(pool.clone()),
+        seals: PgSealConsumptionStore::new(pool.clone()),
         mandates: PgMandateProjectionStore::new(pool.clone()),
         attempts: PgExecutionAttemptStore::new(pool.clone()),
         audit: PgAuditLog::new(pool),
@@ -184,13 +186,15 @@ async fn export_receipt(State(state): State<ReadState>, Path(id): Path<String>) 
         Err(err) => return ApiError::from(err).into_response(),
         Ok(Some(_)) => {}
     }
-    match export_manifest_bytes(&state.receipts, &state.evidence, &id).await {
+    match export_manifest_bytes(&state.receipts, &state.evidence, &state.seals, &id).await {
         Ok(bytes) => (
             [(axum::http::header::CONTENT_TYPE, "application/json")],
             bytes,
         )
             .into_response(),
-        Err(err) => ApiError::internal(format!("cannot export receipt {id}: {err}")).into_response(),
+        Err(err) => {
+            ApiError::internal(format!("cannot export receipt {id}: {err}")).into_response()
+        }
     }
 }
 
@@ -267,7 +271,11 @@ async fn get_mandate_chain(State(state): State<ReadState>, Path(id): Path<String
     };
     let mut timeline: Vec<ChainStep> = recent
         .into_iter()
-        .filter(|event| match_ids.iter().any(|needle| event.detail.contains(needle.as_str())))
+        .filter(|event| {
+            match_ids
+                .iter()
+                .any(|needle| event.detail.contains(needle.as_str()))
+        })
         .map(|event| ChainStep {
             at: event.occurred_at_unix_seconds,
             actor: event.actor,

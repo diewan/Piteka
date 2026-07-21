@@ -33,7 +33,9 @@ use axum::{
 use ed25519_dalek::{Signer, SigningKey};
 use piteka_application::bundle_export::export_manifest_bytes;
 use piteka_storage::ReceiptProjectionStore;
-use piteka_storage::postgres::{PgEvidenceNodeStore, PgReceiptProjectionStore};
+use piteka_storage::postgres::{
+    PgEvidenceNodeStore, PgReceiptProjectionStore, PgSealConsumptionStore,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -116,6 +118,7 @@ struct FeedState {
     bearer_token: Arc<String>,
     receipts: PgReceiptProjectionStore,
     evidence: PgEvidenceNodeStore,
+    seals: PgSealConsumptionStore,
     signing_key: Arc<SigningKey>,
     signing_key_id: Arc<String>,
     tenant_id: Arc<String>,
@@ -150,6 +153,7 @@ fn load_signing_key(path: &str) -> Result<SigningKey, String> {
 async fn build_exports(
     receipts: &PgReceiptProjectionStore,
     evidence: &PgEvidenceNodeStore,
+    seals: &PgSealConsumptionStore,
     ordered_receipts: &[(String, i64)],
     tenant_id: &str,
     signing_key_id: &str,
@@ -162,7 +166,7 @@ async fn build_exports(
         // evidence) is skipped, not fatal: one bad receipt must not take the
         // whole feed offline. Skipping is deterministic, so sequence numbers
         // over the successful receipts stay stable across pulls.
-        let payload = match export_manifest_bytes(receipts, evidence, receipt_id).await {
+        let payload = match export_manifest_bytes(receipts, evidence, seals, receipt_id).await {
             Ok(payload) => payload,
             Err(error) => {
                 eprintln!("feed: skipping receipt {receipt_id}: {error}");
@@ -244,6 +248,7 @@ async fn serve_feed(
     let exports = build_exports(
         &state.receipts,
         &state.evidence,
+        &state.seals,
         &ordered,
         &state.tenant_id,
         &state.signing_key_id,
@@ -297,7 +302,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = piteka_storage::postgres::connect(&database_url).await?;
     piteka_storage::postgres::run_migrations(&pool).await?;
     let receipts = PgReceiptProjectionStore::new(pool.clone());
-    let evidence = PgEvidenceNodeStore::new(pool);
+    let evidence = PgEvidenceNodeStore::new(pool.clone());
+    let seals = PgSealConsumptionStore::new(pool);
 
     println!(
         "verifying_key_hex={}",
@@ -315,6 +321,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         bearer_token: Arc::new(bearer_token),
         receipts,
         evidence,
+        seals,
         signing_key: Arc::new(signing_key),
         signing_key_id: Arc::new(signing_key_id),
         tenant_id: Arc::new(tenant_id),
@@ -322,10 +329,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let app = Router::new()
         .route("/feed", get(serve_feed))
-        .route(
-            "/health",
-            get(|| async { StatusCode::OK }),
-        )
+        .route("/health", get(|| async { StatusCode::OK }))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(bind).await?;

@@ -9,6 +9,7 @@ rust-version.workspace = true
 async-trait = "0.1"
 chrono = { version = "0.4", default-features = false }
 futures-util = "0.3"
+hex = "0.4"
 piteka-domain.workspace = true
 piteka-github.workspace = true
 piteka-ports.workspace = true

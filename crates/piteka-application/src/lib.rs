@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod action_request;
+pub mod anchor;
 pub mod authz;
 pub mod bundle_export;
 pub mod dispatch;
@@ -30,6 +31,7 @@ pub use action_request::{
     ActionRequestPorts, ActionRequestUseCase, ActionRequestUseCaseError, Approved, Proposed,
     Rejected, Revoked,
 };
+pub use anchor::{AnchorUseCase, AnchorUseCaseError};
 pub use authz::{ActionSensitivity, AuthorizationRequest, Denial, ReauthPolicy};
 pub use dispatch::{
     DispatchError, DispatchOutcome, DispatchPorts, DispatchUseCase, Dispatched, ReservationFailed,

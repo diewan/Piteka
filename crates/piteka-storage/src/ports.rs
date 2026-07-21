@@ -7,7 +7,8 @@ use crate::error::StorageResult;
 use crate::model::{
     ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome,
     EvidenceDescriptor, EvidenceNodeRecord, ExecutionAttempt, MandateProjection,
-    ProtocolObjectRecord, ReceiptProjection, WebhookReceipt, WebhookRecordOutcome,
+    ProtocolObjectRecord, ReceiptProjection, SealConsumptionProofRecord, WebhookReceipt,
+    WebhookRecordOutcome,
 };
 
 /// Immutable, id-addressed storage for canonical Parwana objects.
@@ -29,6 +30,31 @@ pub trait ProtocolObjectStore: Send + Sync {
     ///
     /// Returns a backend error on failure.
     async fn get(&self, object_id_hex: &str) -> StorageResult<Option<ProtocolObjectRecord>>;
+}
+
+/// Immutable, mandate-addressed storage for Single-Use Seal consumption proofs (§5.9).
+///
+/// The proof is corroborating evidence written off the dispatch hot path; the Postgres
+/// mandate CAS remains the authoritative liveness reservation.
+#[async_trait]
+pub trait SealConsumptionStore: Send + Sync {
+    /// Stores a consumption proof for a mandate.
+    ///
+    /// Storing the same mandate id with an identical proof is idempotent. Storing an
+    /// existing mandate id with a different proof is an
+    /// [`crate::StorageError::ImmutableViolation`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on an immutability violation or a backend failure.
+    async fn put(&self, record: SealConsumptionProofRecord) -> StorageResult<()>;
+
+    /// Fetches the consumption proof for a mandate, if one was recorded.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error on failure.
+    async fn get(&self, mandate_id_hex: &str) -> StorageResult<Option<SealConsumptionProofRecord>>;
 }
 
 /// Live mandate projection storage with optimistic-concurrency CAS.

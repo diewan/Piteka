@@ -326,6 +326,7 @@ pub async fn export_bundle(
         &ports.evidence_store,
         &ports.evidence_blob_store,
         &ports.protocol_store,
+        &ports.seal_consumption_store,
         &receipt_id,
     )
     .await

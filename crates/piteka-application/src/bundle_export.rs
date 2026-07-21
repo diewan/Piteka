@@ -12,9 +12,11 @@
 use piteka_storage::digest::ContentDigest;
 use piteka_storage::model::{
     EvidenceNodeRecord, EvidenceSource, ProtocolObjectRecord, ReceiptProjection,
+    SealConsumptionProofRecord,
 };
 use piteka_storage::ports::{
     EvidenceNodeStore, EvidenceObjectStore, ProtocolObjectStore, ReceiptProjectionStore,
+    SealConsumptionStore,
 };
 
 use crate::receipt_production::outcome_as_str;
@@ -112,11 +114,12 @@ pub struct BundleExport {
 /// Evidence blobs are stored in the evidence blob store.
 ///
 /// Returns a [`BundleExport`] with the bundle identifier and digest.
-pub async fn assemble_bundle<R, E, Eb, P>(
+pub async fn assemble_bundle<R, E, Eb, P, SC>(
     receipt_store: &R,
     evidence_store: &E,
     evidence_blob_store: &Eb,
     protocol_store: &P,
+    seal_consumption_store: &SC,
     receipt_id_hex: &str,
 ) -> Result<BundleExport, BundleExportError>
 where
@@ -124,6 +127,7 @@ where
     E: EvidenceNodeStore,
     Eb: EvidenceObjectStore,
     P: ProtocolObjectStore,
+    SC: SealConsumptionStore,
 {
     // 1. Fetch the receipt.
     let receipt = receipt_store
@@ -154,8 +158,15 @@ where
         });
     }
 
-    // 4. Assemble the bundle manifest as JSON.
-    let bundle_manifest = assemble_manifest(&receipt, &dispatch_nodes, &target_nodes, &gap_nodes)?;
+    // 4. Assemble the bundle manifest as JSON, including any independent single-use anchor.
+    let anchor = seal_consumption_store.get(&receipt.mandate_id_hex).await?;
+    let bundle_manifest = assemble_manifest(
+        &receipt,
+        &dispatch_nodes,
+        &target_nodes,
+        &gap_nodes,
+        anchor.as_ref(),
+    )?;
 
     // 5. Store the canonical bundle bytes.
     let bundle_bytes = serde_json::to_vec(&bundle_manifest).map_err(|e| {
@@ -196,14 +207,16 @@ where
 /// feed and that Tuppira's `PitekaEvidenceFeedConnector` deserializes as an
 /// `ExportManifest` (`bundle_version` `"0.1"`). Keeping this side-effect free
 /// lets the feed producer publish observations from already-captured evidence.
-pub async fn export_manifest_bytes<R, E>(
+pub async fn export_manifest_bytes<R, E, SC>(
     receipt_store: &R,
     evidence_store: &E,
+    seal_consumption_store: &SC,
     receipt_id_hex: &str,
 ) -> Result<Vec<u8>, BundleExportError>
 where
     R: ReceiptProjectionStore,
     E: EvidenceNodeStore,
+    SC: SealConsumptionStore,
 {
     let receipt = receipt_store
         .get(receipt_id_hex)
@@ -213,11 +226,17 @@ where
     let dispatch_nodes = fetch_nodes(evidence_store, &receipt.dispatch_evidence_refs).await?;
     let target_nodes = fetch_nodes(evidence_store, &receipt.target_evidence_refs).await?;
     let gap_nodes = fetch_nodes(evidence_store, &receipt.evidence_gaps).await?;
+    let anchor = seal_consumption_store.get(&receipt.mandate_id_hex).await?;
 
-    let manifest = assemble_manifest(&receipt, &dispatch_nodes, &target_nodes, &gap_nodes)?;
-    serde_json::to_vec(&manifest).map_err(|e| {
-        BundleExportError::Serialization(format!("failed to serialize manifest: {e}"))
-    })
+    let manifest = assemble_manifest(
+        &receipt,
+        &dispatch_nodes,
+        &target_nodes,
+        &gap_nodes,
+        anchor.as_ref(),
+    )?;
+    serde_json::to_vec(&manifest)
+        .map_err(|e| BundleExportError::Serialization(format!("failed to serialize manifest: {e}")))
 }
 
 /// Fetches evidence nodes by their IDs.
@@ -280,16 +299,34 @@ async fn store_evidence_blob<Eb: EvidenceObjectStore>(
     Ok((digest, size_bytes))
 }
 
+/// Renders a stored seal-consumption proof as the manifest's `single_use_anchor` object.
+///
+/// The field is present only when the mandate's single use was independently anchored;
+/// its absence is a limitation the verifier reports, never a failure (§5.5, §5.9).
+fn single_use_anchor_value(anchor: Option<&SealConsumptionProofRecord>) -> serde_json::Value {
+    match anchor {
+        Some(record) => serde_json::json!({
+            "seal_id_hex": record.seal_id_hex,
+            "nullifier_hex": record.nullifier_hex,
+            "commitment_hex": record.commitment_hex,
+            "anchor_backend": record.anchor_backend,
+        }),
+        None => serde_json::Value::Null,
+    }
+}
+
 /// Assembles a bundle manifest JSON value.
 fn assemble_manifest(
     receipt: &ReceiptProjection,
     dispatch_nodes: &[EvidenceNodeRecord],
     target_nodes: &[EvidenceNodeRecord],
     gap_nodes: &[EvidenceNodeRecord],
+    single_use_anchor: Option<&SealConsumptionProofRecord>,
 ) -> Result<serde_json::Value, BundleExportError> {
     let outcome_str = outcome_as_str(&receipt.outcome);
 
     Ok(serde_json::json!({
+        "single_use_anchor": single_use_anchor_value(single_use_anchor),
         "bundle_version": "0.1",
         "receipt": {
             "receipt_id": receipt.receipt_id_hex,

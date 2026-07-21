@@ -14,13 +14,13 @@ use crate::error::{StorageError, StorageResult};
 use crate::model::{
     ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome,
     EvidenceDescriptor, EvidenceNodeRecord, ExecutionAttempt, ExecutionAttemptState,
-    MandateProjection, ProtocolObjectRecord, ReceiptProjection, WebhookReceipt,
-    WebhookRecordOutcome,
+    MandateProjection, ProtocolObjectRecord, ReceiptProjection, SealConsumptionProofRecord,
+    WebhookReceipt, WebhookRecordOutcome,
 };
 use crate::ports::{
     ActionRequestStore, ApprovalDecisionStore, AuditLog, EvidenceNodeStore, EvidenceObjectStore,
     ExecutionAttemptStore, MandateProjectionStore, ProtocolObjectStore, ReceiptProjectionStore,
-    WebhookReceiptStore,
+    SealConsumptionStore, WebhookReceiptStore,
 };
 
 /// In-memory immutable protocol-object store.
@@ -54,6 +54,41 @@ impl ProtocolObjectStore for InMemoryProtocolObjectStore {
             .lock()
             .expect("lock poisoned")
             .get(object_id_hex)
+            .cloned())
+    }
+}
+
+/// In-memory immutable seal-consumption proof store.
+#[derive(Default)]
+pub struct InMemorySealConsumptionStore {
+    proofs: Mutex<HashMap<String, SealConsumptionProofRecord>>,
+}
+
+#[async_trait]
+impl SealConsumptionStore for InMemorySealConsumptionStore {
+    async fn put(&self, record: SealConsumptionProofRecord) -> StorageResult<()> {
+        if record.mandate_id_hex.is_empty() {
+            return Err(StorageError::EmptyField("mandate_id_hex"));
+        }
+        let mut proofs = self.proofs.lock().expect("lock poisoned");
+        if let Some(existing) = proofs.get(&record.mandate_id_hex) {
+            if existing != &record {
+                return Err(StorageError::ImmutableViolation {
+                    object_id_hex: record.mandate_id_hex,
+                });
+            }
+            return Ok(());
+        }
+        proofs.insert(record.mandate_id_hex.clone(), record);
+        Ok(())
+    }
+
+    async fn get(&self, mandate_id_hex: &str) -> StorageResult<Option<SealConsumptionProofRecord>> {
+        Ok(self
+            .proofs
+            .lock()
+            .expect("lock poisoned")
+            .get(mandate_id_hex)
             .cloned())
     }
 }
@@ -673,6 +708,16 @@ impl ProtocolObjectStore for std::sync::Arc<InMemoryProtocolObjectStore> {
     }
     async fn get(&self, object_id_hex: &str) -> StorageResult<Option<ProtocolObjectRecord>> {
         self.as_ref().get(object_id_hex).await
+    }
+}
+
+#[async_trait]
+impl SealConsumptionStore for std::sync::Arc<InMemorySealConsumptionStore> {
+    async fn put(&self, record: SealConsumptionProofRecord) -> StorageResult<()> {
+        self.as_ref().put(record).await
+    }
+    async fn get(&self, mandate_id_hex: &str) -> StorageResult<Option<SealConsumptionProofRecord>> {
+        self.as_ref().get(mandate_id_hex).await
     }
 }
 

@@ -109,6 +109,8 @@ pub struct TestPorts {
     pub evidence_blob_store: std::sync::Arc<piteka_storage::memory::InMemoryEvidenceStore>,
     pub protocol_store: std::sync::Arc<piteka_storage::memory::InMemoryProtocolObjectStore>,
     pub attempt_store: std::sync::Arc<piteka_storage::memory::InMemoryExecutionAttemptStore>,
+    pub seal_consumption_store:
+        std::sync::Arc<piteka_storage::memory::InMemorySealConsumptionStore>,
 }
 
 impl TestPorts {
@@ -141,6 +143,9 @@ impl TestPorts {
             ),
             attempt_store: std::sync::Arc::new(
                 piteka_storage::memory::InMemoryExecutionAttemptStore::default(),
+            ),
+            seal_consumption_store: std::sync::Arc::new(
+                piteka_storage::memory::InMemorySealConsumptionStore::default(),
             ),
         }
     }

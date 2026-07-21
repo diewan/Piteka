@@ -4,11 +4,12 @@ use std::{env, fs, sync::Arc};
 
 use piteka_application::dispatch::compute_attempt_digest;
 use piteka_application::{
-    ActionRequestPorts, ActionRequestUseCase, Clock, DispatchOutcome, DispatchPorts,
+    ActionRequestPorts, ActionRequestUseCase, AnchorUseCase, Clock, DispatchOutcome, DispatchPorts,
     DispatchUseCase, SystemClock,
 };
 use piteka_domain::{OrganizationId, UserId};
 use piteka_github::{GitHubAppAdapter, InMemorySecretResolver};
+use piteka_infra::LocalCsvSealAnchor;
 use piteka_ports::github::{
     GitHubAppPort, GitHubEnvironmentName, GitHubInstallationContext, GitHubInstallationId,
     GitHubRepositoryId,
@@ -27,6 +28,7 @@ struct DemoPorts {
     mandates: piteka_storage::postgres::PgMandateProjectionStore,
     attempts: piteka_storage::postgres::PgExecutionAttemptStore,
     receipts: piteka_storage::postgres::PgReceiptProjectionStore,
+    seals: piteka_storage::postgres::PgSealConsumptionStore,
     audit: piteka_storage::postgres::PgAuditLog,
 }
 
@@ -40,6 +42,7 @@ impl DemoPorts {
             mandates: piteka_storage::postgres::PgMandateProjectionStore::new(pool.clone()),
             attempts: piteka_storage::postgres::PgExecutionAttemptStore::new(pool.clone()),
             receipts: piteka_storage::postgres::PgReceiptProjectionStore::new(pool.clone()),
+            seals: piteka_storage::postgres::PgSealConsumptionStore::new(pool.clone()),
             audit: piteka_storage::postgres::PgAuditLog::new(pool),
         })
     }
@@ -219,6 +222,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Err(error.into());
         }
     };
+
+    // Independent single-use anchor (Phase B, §5.9), recorded off the dispatch hot path:
+    // the provider call already returned above, so this only corroborates — the Postgres
+    // reservation stays the authoritative liveness check. Create the seal binding the
+    // authorized intent id, consume it once with the mandate's reservation-token digest,
+    // and persist the proof so the exported bundle manifest can disclose it. A failure here
+    // is a corroboration gap, never a reason to fail an otherwise-completed mandate.
+    let anchor = AnchorUseCase::new(LocalCsvSealAnchor::new(), ports.seals.clone());
+    match anchor
+        .record_single_use(&mandate_id, &intent_id, &reservation_digest)
+        .await
+    {
+        Ok(record) => println!(
+            "recorded independent single-use anchor: seal {} backend {}",
+            record.seal_id_hex, record.anchor_backend
+        ),
+        Err(error) => eprintln!("single-use anchor not recorded (corroboration gap): {error}"),
+    }
 
     let mandate = ports
         .mandates

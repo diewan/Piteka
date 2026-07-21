@@ -13,11 +13,11 @@ use crate::error::{StorageError, StorageResult};
 use crate::model::{
     AuditEvent, CasOutcome, EvidenceNodeRecord, EvidenceSource, ExecutionAttempt,
     ExecutionAttemptState, MandateProjection, ProtocolObjectRecord, ReceiptOutcome,
-    ReceiptProjection, WebhookReceipt, WebhookRecordOutcome,
+    ReceiptProjection, SealConsumptionProofRecord, WebhookReceipt, WebhookRecordOutcome,
 };
 use crate::ports::{
     AuditLog, EvidenceNodeStore, ExecutionAttemptStore, MandateProjectionStore,
-    ProtocolObjectStore, ReceiptProjectionStore, WebhookReceiptStore,
+    ProtocolObjectStore, ReceiptProjectionStore, SealConsumptionStore, WebhookReceiptStore,
 };
 
 fn backend(error: sqlx::Error) -> StorageError {
@@ -112,6 +112,74 @@ impl ProtocolObjectStore for PgProtocolObjectStore {
                 kind: row.try_get("kind").map_err(backend)?,
                 object_id_hex: object_id_hex.to_string(),
                 bytes: row.try_get("bytes").map_err(backend)?,
+            })
+        })
+        .transpose()
+    }
+}
+
+/// Postgres immutable seal-consumption proof store (§5.9).
+#[derive(Clone)]
+pub struct PgSealConsumptionStore {
+    pool: PgPool,
+}
+
+impl PgSealConsumptionStore {
+    /// Wraps a pool.
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl SealConsumptionStore for PgSealConsumptionStore {
+    async fn put(&self, record: SealConsumptionProofRecord) -> StorageResult<()> {
+        if record.mandate_id_hex.is_empty() {
+            return Err(StorageError::EmptyField("mandate_id_hex"));
+        }
+        let inserted = sqlx::query(
+            "INSERT INTO seal_consumption_proofs \
+             (mandate_id_hex, seal_id_hex, nullifier_hex, commitment_hex, anchor_backend) \
+             VALUES ($1, $2, $3, $4, $5) ON CONFLICT (mandate_id_hex) DO NOTHING",
+        )
+        .bind(&record.mandate_id_hex)
+        .bind(&record.seal_id_hex)
+        .bind(&record.nullifier_hex)
+        .bind(&record.commitment_hex)
+        .bind(&record.anchor_backend)
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+
+        if inserted.rows_affected() == 1 {
+            return Ok(());
+        }
+        // Row already existed: enforce immutability by comparing the stored proof.
+        match self.get(&record.mandate_id_hex).await? {
+            Some(existing) if existing == record => Ok(()),
+            _ => Err(StorageError::ImmutableViolation {
+                object_id_hex: record.mandate_id_hex,
+            }),
+        }
+    }
+
+    async fn get(&self, mandate_id_hex: &str) -> StorageResult<Option<SealConsumptionProofRecord>> {
+        let row = sqlx::query(
+            "SELECT seal_id_hex, nullifier_hex, commitment_hex, anchor_backend \
+             FROM seal_consumption_proofs WHERE mandate_id_hex = $1",
+        )
+        .bind(mandate_id_hex)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(backend)?;
+        row.map(|row| {
+            Ok(SealConsumptionProofRecord {
+                mandate_id_hex: mandate_id_hex.to_string(),
+                seal_id_hex: row.try_get("seal_id_hex").map_err(backend)?,
+                nullifier_hex: row.try_get("nullifier_hex").map_err(backend)?,
+                commitment_hex: row.try_get("commitment_hex").map_err(backend)?,
+                anchor_backend: row.try_get("anchor_backend").map_err(backend)?,
             })
         })
         .transpose()

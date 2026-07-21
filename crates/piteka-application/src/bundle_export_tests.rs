@@ -1,14 +1,17 @@
 //! Tests for bundle export (E-06).
 
 use crate::SystemClock;
-use crate::bundle_export::assemble_bundle;
+use crate::bundle_export::{assemble_bundle, export_manifest_bytes};
 use crate::receipt_production::{parse_deployment_status, produce_receipt_from_webhook};
 use piteka_storage::memory::{
     InMemoryAuditLog, InMemoryEvidenceNodeStore, InMemoryEvidenceStore,
     InMemoryExecutionAttemptStore, InMemoryProtocolObjectStore, InMemoryReceiptProjectionStore,
+    InMemorySealConsumptionStore,
 };
-use piteka_storage::model::{ExecutionAttempt, ExecutionAttemptState};
-use piteka_storage::ports::{ExecutionAttemptStore, ProtocolObjectStore, ReceiptProjectionStore};
+use piteka_storage::model::{ExecutionAttempt, ExecutionAttemptState, SealConsumptionProofRecord};
+use piteka_storage::ports::{
+    ExecutionAttemptStore, ProtocolObjectStore, ReceiptProjectionStore, SealConsumptionStore,
+};
 
 fn sample_attempt(deployment_id: u64) -> ExecutionAttempt {
     ExecutionAttempt {
@@ -66,6 +69,7 @@ async fn assemble_bundle_success() {
         &*evidence_store,
         &*evidence_blob_store,
         &*protocol_store,
+        &InMemorySealConsumptionStore::default(),
         &result.receipt_id_hex,
     )
     .await;
@@ -76,6 +80,57 @@ async fn assemble_bundle_success() {
     assert_eq!(bundle.receipt_id_hex, result.receipt_id_hex);
     assert_eq!(bundle.mandate_id_hex, "mand-002");
     assert!(!bundle.evidence_node_ids.is_empty());
+}
+
+#[tokio::test]
+async fn manifest_discloses_a_stored_single_use_anchor_and_omits_an_absent_one() {
+    let receipt_store = InMemoryReceiptProjectionStore::default();
+    let evidence_store = InMemoryEvidenceNodeStore::default();
+    let seal_store = InMemorySealConsumptionStore::default();
+
+    receipt_store
+        .insert(piteka_storage::model::ReceiptProjection {
+            receipt_id_hex: "rcpt-anchor".into(),
+            mandate_id_hex: "mandate-anchor".into(),
+            intent_id_hex: "intent".into(),
+            attempt_id_hex: "attempt".into(),
+            outcome: piteka_storage::model::ReceiptOutcome::Succeeded,
+            created_at_unix_seconds: 1,
+            dispatch_evidence_refs: vec![],
+            target_evidence_refs: vec![],
+            evidence_gaps: vec![],
+            canonical_bytes: None,
+        })
+        .await
+        .unwrap();
+
+    // With no stored proof, the manifest carries an explicit null anchor (a limitation).
+    let bytes = export_manifest_bytes(&receipt_store, &evidence_store, &seal_store, "rcpt-anchor")
+        .await
+        .unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(manifest["single_use_anchor"].is_null());
+
+    // Once the proof exists for the receipt's mandate, the manifest discloses it verbatim.
+    seal_store
+        .put(SealConsumptionProofRecord {
+            mandate_id_hex: "mandate-anchor".into(),
+            seal_id_hex: "aa".repeat(32),
+            nullifier_hex: "bb".repeat(32),
+            commitment_hex: "cc".repeat(32),
+            anchor_backend: "csv-seal.local.v1".into(),
+        })
+        .await
+        .unwrap();
+    let bytes = export_manifest_bytes(&receipt_store, &evidence_store, &seal_store, "rcpt-anchor")
+        .await
+        .unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let anchor = &manifest["single_use_anchor"];
+    assert_eq!(anchor["seal_id_hex"], "aa".repeat(32));
+    assert_eq!(anchor["nullifier_hex"], "bb".repeat(32));
+    assert_eq!(anchor["commitment_hex"], "cc".repeat(32));
+    assert_eq!(anchor["anchor_backend"], "csv-seal.local.v1");
 }
 
 #[tokio::test]
@@ -90,6 +145,7 @@ async fn assemble_bundle_receipt_not_found() {
         &*evidence_store,
         &*evidence_blob_store,
         &*protocol_store,
+        &InMemorySealConsumptionStore::default(),
         "rcpt-nonexistent",
     )
     .await;
@@ -124,6 +180,7 @@ async fn assemble_bundle_fails_closed_when_referenced_evidence_is_missing() {
         &evidence_store,
         &evidence_blob_store,
         &protocol_store,
+        &InMemorySealConsumptionStore::default(),
         "rcpt-missing",
     )
     .await
@@ -168,6 +225,7 @@ async fn bundle_contains_source_attribution() {
         &*evidence_store,
         &*evidence_blob_store,
         &*protocol_store,
+        &InMemorySealConsumptionStore::default(),
         &result.receipt_id_hex,
     )
     .await

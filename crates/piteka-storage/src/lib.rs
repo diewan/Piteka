@@ -29,17 +29,18 @@ pub use error::{StorageError, StorageResult};
 pub use evidence::LocalEvidenceStore;
 pub use memory::{
     InMemoryEvidenceNodeStore, InMemoryExecutionAttemptStore, InMemoryReceiptProjectionStore,
+    InMemorySealConsumptionStore,
 };
 pub use model::{
     ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome,
     EvidenceDescriptor, EvidenceNodeRecord, EvidenceSource, ExecutionAttempt,
     ExecutionAttemptState, MandateProjection, ProtocolObjectRecord, ReceiptOutcome,
-    ReceiptProjection, WebhookReceipt, WebhookRecordOutcome,
+    ReceiptProjection, SealConsumptionProofRecord, WebhookReceipt, WebhookRecordOutcome,
 };
 pub use ports::{
     ActionRequestStore, ApprovalDecisionStore, AuditLog, EvidenceNodeStore, EvidenceObjectStore,
     ExecutionAttemptStore, MandateProjectionStore, ProtocolObjectStore, ReceiptProjectionStore,
-    WebhookReceiptStore,
+    SealConsumptionStore, WebhookReceiptStore,
 };
 
 #[cfg(test)]
