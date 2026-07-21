@@ -18,10 +18,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let web_router = piteka_web::web_router(use_case.clone());
     let assets_router = piteka_web::assets_router();
 
-    // Build the API router
+    // Build the API router. With a database configured, mount the live webhook
+    // and the Postgres-backed read API (mandate/receipt/chain/export) that the
+    // Hemion explorer drills into.
     let api_router = if let Ok(database_url) = std::env::var("DATABASE_URL") {
         piteka_api::routes::build_full_router(test_ports.use_case())
             .merge(piteka_api::routes::build_live_webhook_router(&database_url).await?)
+            .merge(piteka_api::routes::build_live_read_router(&database_url).await?)
     } else {
         piteka_api::routes::build_full_router_with_webhook(test_ports)
     };

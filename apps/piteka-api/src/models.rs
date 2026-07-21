@@ -130,3 +130,120 @@ pub struct RevokeRequest {
     /// The expected version for optimistic concurrency (CAS).
     pub version: i64,
 }
+
+// ── Read-model responses (Hemion explorer drill-down) ────────────────────────
+//
+// These serialize Piteka's Postgres projections for the developer console.
+// They are read-only views; validity is always recomputed locally in Hemion
+// against the Parwana verifier, never trusted from these payloads.
+
+/// A row in the receipts list.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptSummary {
+    /// Receipt identifier (lower-case hex).
+    pub receipt_id: String,
+    /// The mandate this receipt is about.
+    pub mandate_id: String,
+    /// Reported outcome (`succeeded`, `failed`, `rejected`, `unknown`).
+    pub outcome: String,
+    /// Receipt production time, Unix seconds.
+    pub created_at: i64,
+}
+
+/// Full receipt projection with its evidence references.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptDetail {
+    /// Receipt identifier (lower-case hex).
+    pub receipt_id: String,
+    /// The mandate this receipt is about.
+    pub mandate_id: String,
+    /// The intent digest this receipt is about (empty if never bound).
+    pub intent_id: String,
+    /// The execution attempt this receipt covers.
+    pub attempt_id: String,
+    /// Reported outcome.
+    pub outcome: String,
+    /// Receipt production time, Unix seconds.
+    pub created_at: i64,
+    /// Evidence nodes produced at the dispatch/executor boundary.
+    pub dispatch_evidence_refs: Vec<String>,
+    /// Evidence nodes produced at the target/provider boundary.
+    pub target_evidence_refs: Vec<String>,
+    /// Evidence gaps: required evidence that is missing or unavailable.
+    pub evidence_gaps: Vec<String>,
+}
+
+/// A mandate projection.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MandateDetail {
+    /// Mandate identifier (lower-case hex).
+    pub mandate_id: String,
+    /// Projected state label (for example `reserved`, `consumed`).
+    pub state: String,
+    /// Optimistic-concurrency version.
+    pub version: i64,
+}
+
+/// One audit-log step in a mandate's chain, chronological.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChainStep {
+    /// Event time, Unix seconds.
+    pub at: i64,
+    /// Acting identity, if any.
+    pub actor: Option<String>,
+    /// The attempted action or capability.
+    pub action: String,
+    /// The decision recorded.
+    pub decision: String,
+    /// Free-form investigator detail.
+    pub detail: String,
+}
+
+/// An execution attempt in a mandate's chain.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChainAttempt {
+    /// Attempt identifier (lower-case hex).
+    pub attempt_id: String,
+    /// Executor service identity.
+    pub executor_identity: String,
+    /// Current attempt state.
+    pub state: String,
+    /// GitHub-assigned deployment id, once the provider call completes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_deployment_id: Option<u64>,
+    /// When the attempt was prepared, Unix seconds.
+    pub started_at: i64,
+}
+
+/// A structured evidence node referenced by a receipt in the chain.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChainEvidence {
+    /// Content-addressed node identifier.
+    pub node_id: String,
+    /// Registered node type (claim, observation, attestation, gap).
+    pub registry_id: String,
+    /// Source attribution (`piteka`, `provider:github`, `verifier`).
+    pub source: String,
+    /// Producer identity.
+    pub producer_identity: String,
+    /// Content digest of the evidence payload (hex).
+    pub content_digest: String,
+    /// Registered media type.
+    pub media_type: String,
+}
+
+/// The assembled accountability chain for one mandate: authority → action →
+/// provider deployment → receipt → evidence, with the audit timeline.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MandateChain {
+    /// The mandate at the root of the chain.
+    pub mandate: MandateDetail,
+    /// The audit timeline, chronological.
+    pub timeline: Vec<ChainStep>,
+    /// Execution attempts against this mandate.
+    pub attempts: Vec<ChainAttempt>,
+    /// Receipts produced for this mandate.
+    pub receipts: Vec<ReceiptDetail>,
+    /// Evidence nodes referenced by those receipts.
+    pub evidence: Vec<ChainEvidence>,
+}

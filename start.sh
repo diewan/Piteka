@@ -31,6 +31,17 @@ if [[ -z "${PITEKA_GITHUB_WEBHOOK_SECRET:-}" ]]; then
   [[ -n "$PITEKA_GITHUB_WEBHOOK_SECRET" ]] || { echo "Webhook secret must not be empty." >&2; exit 1; }
   export PITEKA_GITHUB_WEBHOOK_SECRET
 fi
+
+# With a database configured, piteka-web mounts the live GitHub webhook (receipts
+# persist to Postgres) and the Postgres-backed read API the Hemion explorer drills
+# into. Without it, piteka-web falls back to demo-only in-memory ports and neither
+# the feed nor the explorer chain view has data. Default to the local demo cluster.
+export DATABASE_URL="${DATABASE_URL:-postgres://zorvan@127.0.0.1:55432/postgres}"
+if ! pg_isready -d "$DATABASE_URL" >/dev/null 2>&1; then
+  echo "Warning: Postgres at DATABASE_URL is not reachable ($DATABASE_URL)." >&2
+  echo "         Start it first, or the live webhook + read API will fail to bind." >&2
+fi
+
 (cd "$repo_dir" && nohup setsid cargo run -p piteka-web >>"$log_file" 2>&1 & echo $! >"$pid_file")
 
 for _ in {1..120}; do

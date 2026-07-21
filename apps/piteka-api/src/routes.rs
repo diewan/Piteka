@@ -2,17 +2,28 @@
 
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Path, State},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use piteka_application::ActionRequestUseCase;
+use piteka_application::bundle_export::export_manifest_bytes;
+use piteka_storage::postgres::{
+    PgAuditLog, PgEvidenceNodeStore, PgExecutionAttemptStore, PgMandateProjectionStore,
+    PgReceiptProjectionStore,
+};
+use piteka_storage::{
+    AuditLog, EvidenceNodeRecord, EvidenceNodeStore, EvidenceSource, ExecutionAttempt,
+    ExecutionAttemptState, ExecutionAttemptStore, MandateProjectionStore, ReceiptOutcome,
+    ReceiptProjection, ReceiptProjectionStore,
+};
 
 use crate::TestPorts;
 use crate::error::ApiError;
 use crate::models::{
-    ActionRequestResponse, ActionRequestSummary, ApproveRequest, CreateActionRequestRequest,
-    RejectRequest, RevokeRequest,
+    ActionRequestResponse, ActionRequestSummary, ApproveRequest, ChainAttempt, ChainEvidence,
+    ChainStep, CreateActionRequestRequest, MandateChain, MandateDetail, ReceiptDetail,
+    ReceiptSummary, RejectRequest, RevokeRequest,
 };
 
 /// Builds the action-requests router mounted at `/api/v1/action-requests`.
@@ -91,6 +102,262 @@ pub async fn build_live_webhook_router(
             post(crate::webhook::handle_webhook),
         )
         .with_state(state))
+}
+
+/// Shared state for the Postgres-backed read API. Holds the projection stores;
+/// each is a cheap clone over a shared connection pool.
+#[derive(Clone)]
+pub struct ReadState {
+    receipts: PgReceiptProjectionStore,
+    evidence: PgEvidenceNodeStore,
+    mandates: PgMandateProjectionStore,
+    attempts: PgExecutionAttemptStore,
+    audit: PgAuditLog,
+}
+
+/// Builds the PostgreSQL-backed **read** API that Hemion's explorer drills into.
+///
+/// These endpoints expose Piteka's own projections (receipts, mandates, the
+/// assembled accountability chain, and bundle exports). They are read-only:
+/// Hemion recomputes validity locally against the Parwana verifier and never
+/// trusts a verdict from here (Master Plan §32).
+pub async fn build_live_read_router(
+    database_url: &str,
+) -> Result<Router, piteka_storage::StorageError> {
+    let pool = piteka_storage::postgres::connect(database_url).await?;
+    piteka_storage::postgres::run_migrations(&pool).await?;
+    let state = ReadState {
+        receipts: PgReceiptProjectionStore::new(pool.clone()),
+        evidence: PgEvidenceNodeStore::new(pool.clone()),
+        mandates: PgMandateProjectionStore::new(pool.clone()),
+        attempts: PgExecutionAttemptStore::new(pool.clone()),
+        audit: PgAuditLog::new(pool),
+    };
+    Ok(Router::new()
+        .route("/api/v1/receipts", get(list_receipts))
+        .route("/api/v1/receipts/{id}", get(get_receipt))
+        .route("/api/v1/receipts/{id}/export", get(export_receipt))
+        .route("/api/v1/mandates/{id}", get(get_mandate))
+        .route("/api/v1/mandates/{id}/chain", get(get_mandate_chain))
+        .with_state(state))
+}
+
+// ── Read-model handlers ──────────────────────────────────────────────────────
+
+/// `GET /api/v1/receipts` — every receipt, newest first.
+async fn list_receipts(State(state): State<ReadState>) -> Response {
+    let ids = match state.receipts.list_ids_ordered().await {
+        Ok(ids) => ids,
+        Err(err) => return ApiError::from(err).into_response(),
+    };
+    let mut summaries = Vec::with_capacity(ids.len());
+    for (id, _created) in ids {
+        match state.receipts.get(&id).await {
+            Ok(Some(receipt)) => summaries.push(ReceiptSummary {
+                receipt_id: receipt.receipt_id_hex,
+                mandate_id: receipt.mandate_id_hex,
+                outcome: outcome_str(&receipt.outcome).to_string(),
+                created_at: receipt.created_at_unix_seconds,
+            }),
+            Ok(None) => {}
+            Err(err) => return ApiError::from(err).into_response(),
+        }
+    }
+    summaries.reverse();
+    Json(summaries).into_response()
+}
+
+/// `GET /api/v1/receipts/{id}` — one receipt projection.
+async fn get_receipt(State(state): State<ReadState>, Path(id): Path<String>) -> Response {
+    match state.receipts.get(&id).await {
+        Ok(Some(receipt)) => Json(receipt_detail(receipt)).into_response(),
+        Ok(None) => ApiError::not_found("receipt", &id).into_response(),
+        Err(err) => ApiError::from(err).into_response(),
+    }
+}
+
+/// `GET /api/v1/receipts/{id}/export` — the bundle-export manifest bytes for
+/// local verification in Hemion.
+async fn export_receipt(State(state): State<ReadState>, Path(id): Path<String>) -> Response {
+    match state.receipts.get(&id).await {
+        Ok(None) => return ApiError::not_found("receipt", &id).into_response(),
+        Err(err) => return ApiError::from(err).into_response(),
+        Ok(Some(_)) => {}
+    }
+    match export_manifest_bytes(&state.receipts, &state.evidence, &id).await {
+        Ok(bytes) => (
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            bytes,
+        )
+            .into_response(),
+        Err(err) => ApiError::internal(format!("cannot export receipt {id}: {err}")).into_response(),
+    }
+}
+
+/// `GET /api/v1/mandates/{id}` — one mandate projection.
+async fn get_mandate(State(state): State<ReadState>, Path(id): Path<String>) -> Response {
+    match state.mandates.get(&id).await {
+        Ok(Some(mandate)) => Json(MandateDetail {
+            mandate_id: mandate.mandate_id_hex,
+            state: mandate.state,
+            version: mandate.version,
+        })
+        .into_response(),
+        Ok(None) => ApiError::not_found("mandate", &id).into_response(),
+        Err(err) => ApiError::from(err).into_response(),
+    }
+}
+
+/// `GET /api/v1/mandates/{id}/chain` — the assembled accountability chain:
+/// mandate → audit timeline → execution attempts → receipts → evidence nodes.
+async fn get_mandate_chain(State(state): State<ReadState>, Path(id): Path<String>) -> Response {
+    let mandate = match state.mandates.get(&id).await {
+        Ok(Some(mandate)) => mandate,
+        Ok(None) => return ApiError::not_found("mandate", &id).into_response(),
+        Err(err) => return ApiError::from(err).into_response(),
+    };
+    let receipts = match state.receipts.by_mandate(&id).await {
+        Ok(receipts) => receipts,
+        Err(err) => return ApiError::from(err).into_response(),
+    };
+    let attempts = match state.attempts.by_mandate(&id).await {
+        Ok(attempts) => attempts,
+        Err(err) => return ApiError::from(err).into_response(),
+    };
+
+    // Resolve every distinct evidence node the receipts reference.
+    let mut evidence_ids: Vec<String> = Vec::new();
+    for receipt in &receipts {
+        for node_id in receipt
+            .dispatch_evidence_refs
+            .iter()
+            .chain(receipt.target_evidence_refs.iter())
+        {
+            if !evidence_ids.contains(node_id) {
+                evidence_ids.push(node_id.clone());
+            }
+        }
+    }
+    let mut evidence = Vec::with_capacity(evidence_ids.len());
+    for node_id in &evidence_ids {
+        match state.evidence.get(node_id).await {
+            Ok(Some(node)) => evidence.push(chain_evidence(node)),
+            Ok(None) => {}
+            Err(err) => return ApiError::from(err).into_response(),
+        }
+    }
+
+    // Correlate audit events to this chain by the ids that appear in `detail`.
+    // (A structured subject column would make this exact; see plan notes.)
+    let mut match_ids: Vec<String> = vec![id.clone()];
+    for receipt in &receipts {
+        if !receipt.intent_id_hex.is_empty() {
+            match_ids.push(receipt.intent_id_hex.clone());
+        }
+        if !receipt.attempt_id_hex.is_empty() {
+            match_ids.push(receipt.attempt_id_hex.clone());
+        }
+    }
+    for attempt in &attempts {
+        match_ids.push(attempt.attempt_id_hex.clone());
+    }
+    let recent = match state.audit.recent(2000).await {
+        Ok(events) => events,
+        Err(err) => return ApiError::from(err).into_response(),
+    };
+    let mut timeline: Vec<ChainStep> = recent
+        .into_iter()
+        .filter(|event| match_ids.iter().any(|needle| event.detail.contains(needle.as_str())))
+        .map(|event| ChainStep {
+            at: event.occurred_at_unix_seconds,
+            actor: event.actor,
+            action: event.action,
+            decision: event.decision,
+            detail: event.detail,
+        })
+        .collect();
+    // Present the chain chronologically. A stable sort by timestamp preserves
+    // the audit log's insertion order for same-second ties (propose → approve
+    // → reserve → consume).
+    timeline.sort_by_key(|step| step.at);
+
+    let response = MandateChain {
+        mandate: MandateDetail {
+            mandate_id: mandate.mandate_id_hex,
+            state: mandate.state,
+            version: mandate.version,
+        },
+        timeline,
+        attempts: attempts.into_iter().map(chain_attempt).collect(),
+        receipts: receipts.into_iter().map(receipt_detail).collect(),
+        evidence,
+    };
+    Json(response).into_response()
+}
+
+fn receipt_detail(receipt: ReceiptProjection) -> ReceiptDetail {
+    ReceiptDetail {
+        receipt_id: receipt.receipt_id_hex,
+        mandate_id: receipt.mandate_id_hex,
+        intent_id: receipt.intent_id_hex,
+        attempt_id: receipt.attempt_id_hex,
+        outcome: outcome_str(&receipt.outcome).to_string(),
+        created_at: receipt.created_at_unix_seconds,
+        dispatch_evidence_refs: receipt.dispatch_evidence_refs,
+        target_evidence_refs: receipt.target_evidence_refs,
+        evidence_gaps: receipt.evidence_gaps,
+    }
+}
+
+fn chain_attempt(attempt: ExecutionAttempt) -> ChainAttempt {
+    ChainAttempt {
+        attempt_id: attempt.attempt_id_hex,
+        executor_identity: attempt.executor_identity,
+        state: attempt_state_str(&attempt.state).to_string(),
+        github_deployment_id: attempt.github_deployment_id,
+        started_at: attempt.started_at_unix_seconds,
+    }
+}
+
+fn chain_evidence(node: EvidenceNodeRecord) -> ChainEvidence {
+    ChainEvidence {
+        node_id: node.node_id_hex,
+        registry_id: node.registry_id,
+        source: source_str(&node.source),
+        producer_identity: node.producer_identity,
+        content_digest: node.content_digest.to_hex(),
+        media_type: node.media_type,
+    }
+}
+
+fn outcome_str(outcome: &ReceiptOutcome) -> &'static str {
+    match outcome {
+        ReceiptOutcome::Succeeded => "succeeded",
+        ReceiptOutcome::Failed => "failed",
+        ReceiptOutcome::Rejected => "rejected",
+        ReceiptOutcome::Unknown => "unknown",
+    }
+}
+
+fn attempt_state_str(state: &ExecutionAttemptState) -> &'static str {
+    match state {
+        ExecutionAttemptState::Prepared => "prepared",
+        ExecutionAttemptState::Dispatching => "dispatching",
+        ExecutionAttemptState::Accepted => "accepted",
+        ExecutionAttemptState::Rejected => "rejected",
+        ExecutionAttemptState::OutcomeAmbiguous => "outcome_ambiguous",
+        ExecutionAttemptState::ReconciledAccepted => "reconciled_accepted",
+        ExecutionAttemptState::ReconciledNotAccepted => "reconciled_not_accepted",
+        ExecutionAttemptState::AbandonedAmbiguous => "abandoned_ambiguous",
+    }
+}
+
+fn source_str(source: &EvidenceSource) -> String {
+    match source {
+        EvidenceSource::Piteka => "piteka".to_string(),
+        EvidenceSource::Provider(name) => format!("provider:{name}"),
+        EvidenceSource::Verifier => "verifier".to_string(),
+    }
 }
 
 // ── Handlers ────────────────────────────────────────────────────────────────

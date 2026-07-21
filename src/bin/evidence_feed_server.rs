@@ -17,10 +17,12 @@
 //!   PITEKA_FEED_SIGNING_KEY_ID    signing-key identifier echoed in the feed
 //!   PITEKA_FEED_TENANT_ID         tenant the exports belong to
 //!   PITEKA_FEED_BEARER_TOKEN      shared bearer token required on every pull
-//!   PITEKA_FEED_RECEIPTS          comma-separated receipt IDs, in feed order
+//!   PITEKA_FEED_RECEIPTS          optional comma-separated receipt-id allow-list;
+//!                                 when unset the feed publishes every receipt in
+//!                                 the store, so new deployments appear live
 //!   PITEKA_FEED_BIND              listen address (default 127.0.0.1:3200)
 
-use std::{env, fs, net::SocketAddr, sync::Arc, time::SystemTime};
+use std::{env, fs, net::SocketAddr, sync::Arc};
 
 use axum::{
     Json, Router,
@@ -30,6 +32,7 @@ use axum::{
 };
 use ed25519_dalek::{Signer, SigningKey};
 use piteka_application::bundle_export::export_manifest_bytes;
+use piteka_storage::ReceiptProjectionStore;
 use piteka_storage::postgres::{PgEvidenceNodeStore, PgReceiptProjectionStore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -106,10 +109,19 @@ fn default_limit() -> u32 {
     64
 }
 
+/// Shared feed state. Exports are rebuilt from the live store on every pull so
+/// receipts produced after startup appear without restarting the server.
 #[derive(Clone)]
 struct FeedState {
     bearer_token: Arc<String>,
-    exports: Arc<Vec<SignedPitekaExport>>,
+    receipts: PgReceiptProjectionStore,
+    evidence: PgEvidenceNodeStore,
+    signing_key: Arc<SigningKey>,
+    signing_key_id: Arc<String>,
+    tenant_id: Arc<String>,
+    /// Optional receipt-id allow-list (from `PITEKA_FEED_RECEIPTS`). When `None`
+    /// the feed publishes every receipt currently in the store.
+    allow_list: Option<Arc<Vec<String>>>,
 }
 
 fn required(name: &str) -> Result<String, String> {
@@ -127,37 +139,48 @@ fn load_signing_key(path: &str) -> Result<SigningKey, String> {
     Ok(SigningKey::from_bytes(&seed))
 }
 
-/// Builds every signed export once at startup so the feed is immutable and the
-/// sequence numbers are stable across pulls.
+/// Builds the signed exports for the given receipts, in feed order.
+///
+/// `receipts` is a list of `(receipt_id, created_at)` pairs, oldest-first.
+/// Sequence numbers follow that order (stable as new receipts append at the
+/// end), and each export's emission clock is derived from the receipt's own
+/// immutable `created_at` — bumped to stay *strictly* increasing — so the
+/// consumer's per-observation sync cursor advances monotonically and the same
+/// receipt keeps the same `emitted_at` across pulls.
 async fn build_exports(
-    receipts: PgReceiptProjectionStore,
-    evidence: PgEvidenceNodeStore,
-    receipt_ids: &[String],
+    receipts: &PgReceiptProjectionStore,
+    evidence: &PgEvidenceNodeStore,
+    ordered_receipts: &[(String, i64)],
     tenant_id: &str,
     signing_key_id: &str,
     key: &SigningKey,
 ) -> Result<Vec<SignedPitekaExport>, String> {
-    let emitted_base = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_err(|e| format!("clock error: {e}"))?
-        .as_secs();
-
-    let mut exports = Vec::with_capacity(receipt_ids.len());
-    for (index, receipt_id) in receipt_ids.iter().enumerate() {
-        let payload = export_manifest_bytes(&receipts, &evidence, receipt_id)
-            .await
-            .map_err(|e| format!("cannot export receipt {receipt_id}: {e}"))?;
+    let mut exports = Vec::with_capacity(ordered_receipts.len());
+    let mut last_emitted: u64 = 0;
+    for (receipt_id, created_at) in ordered_receipts.iter() {
+        // A receipt that cannot be assembled into a bundle (e.g. incomplete
+        // evidence) is skipped, not fatal: one bad receipt must not take the
+        // whole feed offline. Skipping is deterministic, so sequence numbers
+        // over the successful receipts stay stable across pulls.
+        let payload = match export_manifest_bytes(receipts, evidence, receipt_id).await {
+            Ok(payload) => payload,
+            Err(error) => {
+                eprintln!("feed: skipping receipt {receipt_id}: {error}");
+                continue;
+            }
+        };
         let payload_sha256: [u8; 32] = Sha256::digest(&payload).into();
-        // Each export gets a strictly increasing emission clock so the consumer's
-        // per-observation sync cursor advances monotonically.
+        let emitted_at = (*created_at).max(0) as u64;
+        let emitted_at = emitted_at.max(last_emitted + 1);
+        last_emitted = emitted_at;
         let mut export = SignedPitekaExport {
             schema_version: FEED_SCHEMA_VERSION,
-            sequence: (index as u64) + 1,
+            sequence: (exports.len() as u64) + 1,
             export_id: receipt_id.clone(),
             revision: 1,
             supersedes_export_id: None,
             tenant_id: tenant_id.to_string(),
-            emitted_at: emitted_base + index as u64,
+            emitted_at,
             payload,
             payload_sha256,
             signing_key_id: signing_key_id.to_string(),
@@ -167,6 +190,33 @@ async fn build_exports(
         exports.push(export);
     }
     Ok(exports)
+}
+
+/// Resolves the receipts to publish, oldest-first, as `(id, created_at)` pairs.
+/// Uses the allow-list when configured, otherwise every receipt in the store.
+async fn current_receipts(state: &FeedState) -> Result<Vec<(String, i64)>, String> {
+    match &state.allow_list {
+        Some(ids) => {
+            let mut pairs = Vec::with_capacity(ids.len());
+            for id in ids.iter() {
+                let receipt = state
+                    .receipts
+                    .get(id)
+                    .await
+                    .map_err(|e| format!("cannot load receipt {id}: {e}"))?
+                    .ok_or_else(|| format!("receipt {id} not found"))?;
+                pairs.push((id.clone(), receipt.created_at_unix_seconds));
+            }
+            // Keep the deterministic oldest-first order the exports rely on.
+            pairs.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+            Ok(pairs)
+        }
+        None => state
+            .receipts
+            .list_ids_ordered()
+            .await
+            .map_err(|e| format!("cannot list receipts: {e}")),
+    }
 }
 
 async fn serve_feed(
@@ -185,12 +235,30 @@ async fn serve_feed(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let selected: Vec<SignedPitekaExport> = state
-        .exports
-        .iter()
+    // Rebuild the feed from the live store on each pull so receipts produced
+    // after startup are published without a restart.
+    let ordered = current_receipts(&state).await.map_err(|error| {
+        eprintln!("feed: {error}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let exports = build_exports(
+        &state.receipts,
+        &state.evidence,
+        &ordered,
+        &state.tenant_id,
+        &state.signing_key_id,
+        &state.signing_key,
+    )
+    .await
+    .map_err(|error| {
+        eprintln!("feed: {error}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let selected: Vec<SignedPitekaExport> = exports
+        .into_iter()
         .filter(|export| export.sequence > query.after_sequence)
         .take(query.limit as usize)
-        .cloned()
         .collect();
     let next_sequence = selected
         .last()
@@ -210,14 +278,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let signing_key_id = required("PITEKA_FEED_SIGNING_KEY_ID")?;
     let tenant_id = required("PITEKA_FEED_TENANT_ID")?;
     let bearer_token = required("PITEKA_FEED_BEARER_TOKEN")?;
-    let receipt_ids: Vec<String> = required("PITEKA_FEED_RECEIPTS")?
-        .split(',')
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect();
-    if receipt_ids.is_empty() {
-        return Err("PITEKA_FEED_RECEIPTS must list at least one receipt id".into());
-    }
+    // Optional allow-list. When unset, the feed publishes every receipt in the
+    // store so new deployments appear live.
+    let allow_list: Option<Arc<Vec<String>>> = env::var("PITEKA_FEED_RECEIPTS")
+        .ok()
+        .map(|raw| {
+            raw.split(',')
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .filter(|ids| !ids.is_empty())
+        .map(Arc::new);
     let bind: SocketAddr = env::var("PITEKA_FEED_BIND")
         .unwrap_or_else(|_| "127.0.0.1:3200".to_string())
         .parse()?;
@@ -227,35 +299,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let receipts = PgReceiptProjectionStore::new(pool.clone());
     let evidence = PgEvidenceNodeStore::new(pool);
 
-    let exports = build_exports(
-        receipts,
-        evidence,
-        &receipt_ids,
-        &tenant_id,
-        &signing_key_id,
-        &signing_key,
-    )
-    .await?;
-
     println!(
         "verifying_key_hex={}",
         hex::encode(signing_key.verifying_key().to_bytes())
     );
     println!("signing_key_id={signing_key_id}");
     println!("tenant_id={tenant_id}");
-    println!("exports={} media_type={MEDIA_TYPE}", exports.len());
-    for export in &exports {
-        println!(
-            "  sequence={} export_id={} payload_sha256={}",
-            export.sequence,
-            export.export_id,
-            hex::encode(export.payload_sha256)
-        );
+    println!("media_type={MEDIA_TYPE}");
+    match &allow_list {
+        Some(ids) => println!("receipt allow-list: {} id(s)", ids.len()),
+        None => println!("publishing all receipts in the store (live)"),
     }
 
     let state = FeedState {
         bearer_token: Arc::new(bearer_token),
-        exports: Arc::new(exports),
+        receipts,
+        evidence,
+        signing_key: Arc::new(signing_key),
+        signing_key_id: Arc::new(signing_key_id),
+        tenant_id: Arc::new(tenant_id),
+        allow_list,
     };
     let app = Router::new()
         .route("/feed", get(serve_feed))

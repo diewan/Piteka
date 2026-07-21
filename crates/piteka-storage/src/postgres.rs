@@ -510,6 +510,29 @@ impl PgReceiptProjectionStore {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
+
+    /// Lists every receipt id with its creation time, ordered oldest-first.
+    ///
+    /// Used by the evidence-export feed to publish receipts as they are
+    /// produced. Ordering is deterministic (`created_at`, then id) so feed
+    /// sequence numbers and emission clocks stay stable as new receipts append.
+    pub async fn list_ids_ordered(&self) -> StorageResult<Vec<(String, i64)>> {
+        let rows = sqlx::query(
+            "SELECT receipt_id_hex, created_at FROM receipt_projections \
+             ORDER BY created_at, receipt_id_hex",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(backend)?;
+        rows.into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get("receipt_id_hex").map_err(backend)?,
+                    row.try_get("created_at").map_err(backend)?,
+                ))
+            })
+            .collect()
+    }
 }
 
 #[async_trait]
@@ -574,8 +597,17 @@ impl ReceiptProjectionStore for PgReceiptProjectionStore {
             Ok(ReceiptProjection {
                 receipt_id_hex: receipt_id_hex.to_string(),
                 mandate_id_hex: row.try_get("mandate_id_hex").map_err(backend)?,
-                intent_id_hex: row.try_get("intent_id_hex").map_err(backend)?,
-                attempt_id_hex: row.try_get("attempt_id_hex").map_err(backend)?,
+                // Some historical receipts predate intent/attempt binding and
+                // store NULL here; treat that as an empty binding rather than a
+                // decode failure so read paths and the feed stay resilient.
+                intent_id_hex: row
+                    .try_get::<Option<String>, _>("intent_id_hex")
+                    .map_err(backend)?
+                    .unwrap_or_default(),
+                attempt_id_hex: row
+                    .try_get::<Option<String>, _>("attempt_id_hex")
+                    .map_err(backend)?
+                    .unwrap_or_default(),
                 outcome: str_to_outcome(row.try_get::<String, _>("outcome").map_err(backend)?),
                 created_at_unix_seconds: row.try_get("created_at").map_err(backend)?,
                 dispatch_evidence_refs,
@@ -615,8 +647,14 @@ impl ReceiptProjectionStore for PgReceiptProjectionStore {
                 Ok(ReceiptProjection {
                     receipt_id_hex: row.try_get("receipt_id_hex").map_err(backend)?,
                     mandate_id_hex: mandate_id_hex.to_string(),
-                    intent_id_hex: row.try_get("intent_id_hex").map_err(backend)?,
-                    attempt_id_hex: row.try_get("attempt_id_hex").map_err(backend)?,
+                    intent_id_hex: row
+                        .try_get::<Option<String>, _>("intent_id_hex")
+                        .map_err(backend)?
+                        .unwrap_or_default(),
+                    attempt_id_hex: row
+                        .try_get::<Option<String>, _>("attempt_id_hex")
+                        .map_err(backend)?
+                        .unwrap_or_default(),
                     outcome: str_to_outcome(row.try_get::<String, _>("outcome").map_err(backend)?),
                     created_at_unix_seconds: row.try_get("created_at").map_err(backend)?,
                     dispatch_evidence_refs,
