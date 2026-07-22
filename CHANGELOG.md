@@ -25,4 +25,10 @@
   rejects changed parameters; a second execute is rejected as
   `MANDATE.REPLAY_DETECTED` with the provider call suppressed. Runbook:
   `development/demo/DEMO_01_AGENT_ACTOR_SCENARIO_A.md`. The human path
-  (`controlled_demo_flow`) remains available.
+  (`controlled_demo_flow`) remains available. The propose → approve/reject →
+  revoke lifecycle is now persisted in Postgres (`PgActionRequestStore` /
+  `PgApprovalDecisionStore`, migration `0004`) behind a `version` CAS, so the
+  agent, the REST API, and the server-rendered work queue share one
+  authoritative store; `LiveActionRequestPorts` wires it when `DATABASE_URL`
+  is set. `PITEKA_WEB_BIND` makes the web listen address configurable for
+  container deployments.
