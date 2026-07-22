@@ -9,8 +9,7 @@ use axum::{
     extract::{Path, State},
     response::Html,
 };
-use piteka_api::TestPorts;
-use piteka_application::ActionRequestUseCase;
+use piteka_application::{ActionRequestPorts, ActionRequestUseCase};
 use piteka_storage::ActionRequestStatus;
 use piteka_ui::{DecisionRow, IntentPanelData, RequestDetailRow, WorkQueueRow};
 
@@ -94,7 +93,9 @@ pub struct SettingsTemplate {
 }
 
 /// GET /work-queue — Work queue (S1).
-pub async fn work_queue(State(use_case): State<ActionRequestUseCase<TestPorts>>) -> Html<String> {
+pub async fn work_queue<P: ActionRequestPorts>(
+    State(use_case): State<ActionRequestUseCase<P>>,
+) -> Html<String> {
     let requests = use_case.list_requests().await.unwrap_or_default();
 
     let rows: Vec<WorkQueueRow> = requests
@@ -126,8 +127,8 @@ pub async fn work_queue(State(use_case): State<ActionRequestUseCase<TestPorts>>)
 }
 
 /// GET /request/:id — Request detail / approval panel (S2).
-pub async fn request_detail(
-    State(use_case): State<ActionRequestUseCase<TestPorts>>,
+pub async fn request_detail<P: ActionRequestPorts>(
+    State(use_case): State<ActionRequestUseCase<P>>,
     Path(request_id): Path<String>,
 ) -> Html<String> {
     let request = match use_case.get_request(&request_id).await {

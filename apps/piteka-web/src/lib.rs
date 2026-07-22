@@ -21,7 +21,7 @@ pub mod pages;
 
 use askama::Template;
 use axum::{Router, response::Html, routing::get};
-use piteka_application::ActionRequestUseCase;
+use piteka_application::{ActionRequestPorts, ActionRequestUseCase};
 use serde::Deserialize;
 
 /// Renders the replay-rejection evidence returned by the authoritative
@@ -54,10 +54,18 @@ pub struct RequestQuery {
 }
 
 /// Builds the web UI router mounted at `/`.
-pub fn web_router(use_case: ActionRequestUseCase<piteka_api::TestPorts>) -> Router {
+///
+/// Generic over the ports `P` so the server-rendered pages read from the same
+/// backing store as the REST API: in-memory [`piteka_api::TestPorts`] with no
+/// database, or the Postgres-backed `piteka_api::LiveActionRequestPorts` when
+/// `DATABASE_URL` is set.
+pub fn web_router<P>(use_case: ActionRequestUseCase<P>) -> Router
+where
+    P: ActionRequestPorts + Clone + Send + Sync + 'static,
+{
     Router::new()
-        .route("/work-queue", get(pages::work_queue))
-        .route("/request/{id}", get(pages::request_detail))
+        .route("/work-queue", get(pages::work_queue::<P>))
+        .route("/request/{id}", get(pages::request_detail::<P>))
         .route("/executions", get(pages::executions))
         .route("/case-files", get(pages::case_files))
         .route("/verification", get(pages::verification))

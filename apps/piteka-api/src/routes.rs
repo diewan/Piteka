@@ -6,8 +6,8 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use piteka_application::ActionRequestUseCase;
 use piteka_application::bundle_export::export_manifest_bytes;
+use piteka_application::{ActionRequestPorts, ActionRequestUseCase};
 use piteka_storage::postgres::{
     PgAuditLog, PgEvidenceNodeStore, PgExecutionAttemptStore, PgMandateProjectionStore,
     PgReceiptProjectionStore, PgSealConsumptionStore,
@@ -27,21 +27,31 @@ use crate::models::{
 };
 
 /// Builds the action-requests router mounted at `/api/v1/action-requests`.
-pub fn action_requests(use_case: ActionRequestUseCase<TestPorts>) -> Router {
+///
+/// Generic over the ports `P` so the same handlers serve both the in-memory
+/// [`TestPorts`] (no database) and the Postgres-backed [`LiveActionRequestPorts`]
+/// (`crate::LiveActionRequestPorts`) used when `DATABASE_URL` is configured.
+pub fn action_requests<P>(use_case: ActionRequestUseCase<P>) -> Router
+where
+    P: ActionRequestPorts + Clone + Send + Sync + 'static,
+{
     Router::new()
-        .route("/", get(list_action_requests))
-        .route("/", post(propose_action_request))
-        .route("/{id}", get(get_action_request))
-        .route("/{id}/approve", post(approve_action_request))
-        .route("/{id}/reject", post(reject_action_request))
-        .route("/{id}/revoke", post(revoke_action_request))
+        .route("/", get(list_action_requests::<P>))
+        .route("/", post(propose_action_request::<P>))
+        .route("/{id}", get(get_action_request::<P>))
+        .route("/{id}/approve", post(approve_action_request::<P>))
+        .route("/{id}/reject", post(reject_action_request::<P>))
+        .route("/{id}/revoke", post(revoke_action_request::<P>))
         .with_state(use_case)
 }
 
 /// Builds the full API router with all first-slice endpoints.
 ///
 /// Mounts at `/api/v1` and serves the OpenAPI spec at `/api/v1/openapi.json`.
-pub fn build_full_router(use_case: ActionRequestUseCase<TestPorts>) -> Router {
+pub fn build_full_router<P>(use_case: ActionRequestUseCase<P>) -> Router
+where
+    P: ActionRequestPorts + Clone + Send + Sync + 'static,
+{
     let action_routes = action_requests(use_case);
 
     Router::new()
@@ -370,7 +380,9 @@ fn source_str(source: &EvidenceSource) -> String {
 
 // ── Handlers ────────────────────────────────────────────────────────────────
 
-async fn list_action_requests(State(use_case): State<ActionRequestUseCase<TestPorts>>) -> Response {
+async fn list_action_requests<P: ActionRequestPorts>(
+    State(use_case): State<ActionRequestUseCase<P>>,
+) -> Response {
     let requests = match use_case.list_requests().await {
         Ok(r) => r,
         Err(err) => return ApiError::from(err).into_response(),
@@ -389,8 +401,8 @@ async fn list_action_requests(State(use_case): State<ActionRequestUseCase<TestPo
     Json(summaries).into_response()
 }
 
-async fn get_action_request(
-    State(use_case): State<ActionRequestUseCase<TestPorts>>,
+async fn get_action_request<P: ActionRequestPorts>(
+    State(use_case): State<ActionRequestUseCase<P>>,
     axum::extract::Path(request_id): axum::extract::Path<String>,
 ) -> Response {
     let request = match use_case.get_request(&request_id).await {
@@ -420,8 +432,8 @@ async fn get_action_request(
     Json(response).into_response()
 }
 
-async fn propose_action_request(
-    State(use_case): State<ActionRequestUseCase<TestPorts>>,
+async fn propose_action_request<P: ActionRequestPorts>(
+    State(use_case): State<ActionRequestUseCase<P>>,
     Json(body): Json<CreateActionRequestRequest>,
 ) -> Response {
     if body.requested_by.is_empty() {
@@ -452,8 +464,8 @@ async fn propose_action_request(
     (axum::http::StatusCode::CREATED, Json(response)).into_response()
 }
 
-async fn approve_action_request(
-    State(use_case): State<ActionRequestUseCase<TestPorts>>,
+async fn approve_action_request<P: ActionRequestPorts>(
+    State(use_case): State<ActionRequestUseCase<P>>,
     axum::extract::Path(request_id): axum::extract::Path<String>,
     Json(body): Json<ApproveRequest>,
 ) -> Response {
@@ -490,8 +502,8 @@ async fn approve_action_request(
     Json(response).into_response()
 }
 
-async fn reject_action_request(
-    State(use_case): State<ActionRequestUseCase<TestPorts>>,
+async fn reject_action_request<P: ActionRequestPorts>(
+    State(use_case): State<ActionRequestUseCase<P>>,
     axum::extract::Path(request_id): axum::extract::Path<String>,
     Json(body): Json<RejectRequest>,
 ) -> Response {
@@ -528,8 +540,8 @@ async fn reject_action_request(
     Json(response).into_response()
 }
 
-async fn revoke_action_request(
-    State(use_case): State<ActionRequestUseCase<TestPorts>>,
+async fn revoke_action_request<P: ActionRequestPorts>(
+    State(use_case): State<ActionRequestUseCase<P>>,
     axum::extract::Path(request_id): axum::extract::Path<String>,
     Json(body): Json<RevokeRequest>,
 ) -> Response {

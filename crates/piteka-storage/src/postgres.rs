@@ -11,13 +11,15 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 
 use crate::error::{StorageError, StorageResult};
 use crate::model::{
-    AuditEvent, CasOutcome, EvidenceNodeRecord, EvidenceSource, ExecutionAttempt,
-    ExecutionAttemptState, MandateProjection, ProtocolObjectRecord, ReceiptOutcome,
-    ReceiptProjection, SealConsumptionProofRecord, WebhookReceipt, WebhookRecordOutcome,
+    ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome,
+    EvidenceNodeRecord, EvidenceSource, ExecutionAttempt, ExecutionAttemptState, MandateProjection,
+    ProtocolObjectRecord, ReceiptOutcome, ReceiptProjection, SealConsumptionProofRecord,
+    WebhookReceipt, WebhookRecordOutcome,
 };
 use crate::ports::{
-    AuditLog, EvidenceNodeStore, ExecutionAttemptStore, MandateProjectionStore,
-    ProtocolObjectStore, ReceiptProjectionStore, SealConsumptionStore, WebhookReceiptStore,
+    ActionRequestStore, ApprovalDecisionStore, AuditLog, EvidenceNodeStore, ExecutionAttemptStore,
+    MandateProjectionStore, ProtocolObjectStore, ReceiptProjectionStore, SealConsumptionStore,
+    WebhookReceiptStore,
 };
 
 fn backend(error: sqlx::Error) -> StorageError {
@@ -930,5 +932,234 @@ fn str_to_outcome(s: String) -> ReceiptOutcome {
         "rejected" => ReceiptOutcome::Rejected,
         "unknown" => ReceiptOutcome::Unknown,
         _ => ReceiptOutcome::Unknown,
+    }
+}
+
+fn action_request_status_to_str(status: &ActionRequestStatus) -> &'static str {
+    match status {
+        ActionRequestStatus::Pending => "pending",
+        ActionRequestStatus::Approved => "approved",
+        ActionRequestStatus::Rejected => "rejected",
+        ActionRequestStatus::Revoked => "revoked",
+    }
+}
+
+fn str_to_action_request_status(s: &str) -> StorageResult<ActionRequestStatus> {
+    match s {
+        "pending" => Ok(ActionRequestStatus::Pending),
+        "approved" => Ok(ActionRequestStatus::Approved),
+        "rejected" => Ok(ActionRequestStatus::Rejected),
+        "revoked" => Ok(ActionRequestStatus::Revoked),
+        other => Err(StorageError::Backend(format!(
+            "unknown action-request status `{other}` in database"
+        ))),
+    }
+}
+
+/// Postgres action-request store with a `version` compare-and-swap on status
+/// transitions (mirrors [`PgMandateProjectionStore`]; Master Plan §6). Postgres
+/// is the sole live-state authority, so exactly one concurrent approver with the
+/// matching version wins the conditional `UPDATE`.
+#[derive(Clone)]
+pub struct PgActionRequestStore {
+    pool: PgPool,
+}
+
+impl PgActionRequestStore {
+    /// Wraps a pool.
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl ActionRequestStore for PgActionRequestStore {
+    async fn insert(&self, request: ActionRequest) -> StorageResult<()> {
+        if request.request_id.is_empty() {
+            return Err(StorageError::EmptyField("request_id"));
+        }
+        // Fresh requests start at version 1 (the column default), matching the
+        // in-memory store. A duplicate id violates the primary key.
+        sqlx::query(
+            "INSERT INTO action_requests \
+             (request_id, requested_by, intent_id_hex, status, version, created_at) \
+             VALUES ($1, $2, $3, $4, 1, $5)",
+        )
+        .bind(&request.request_id)
+        .bind(&request.requested_by)
+        .bind(&request.intent_id_hex)
+        .bind(action_request_status_to_str(&request.status))
+        .bind(request.created_at_unix_seconds)
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(())
+    }
+
+    async fn get(&self, request_id: &str) -> StorageResult<Option<ActionRequest>> {
+        let row = sqlx::query(
+            "SELECT requested_by, intent_id_hex, status, created_at \
+             FROM action_requests WHERE request_id = $1",
+        )
+        .bind(request_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(backend)?;
+        row.map(|row| {
+            let status: String = row.try_get("status").map_err(backend)?;
+            Ok(ActionRequest {
+                request_id: request_id.to_string(),
+                requested_by: row.try_get("requested_by").map_err(backend)?,
+                intent_id_hex: row.try_get("intent_id_hex").map_err(backend)?,
+                status: str_to_action_request_status(&status)?,
+                created_at_unix_seconds: row.try_get("created_at").map_err(backend)?,
+            })
+        })
+        .transpose()
+    }
+
+    async fn list(&self) -> StorageResult<Vec<ActionRequest>> {
+        // Insertion order (created_at, then id for a stable tiebreak).
+        let rows = sqlx::query(
+            "SELECT request_id, requested_by, intent_id_hex, status, created_at \
+             FROM action_requests ORDER BY created_at ASC, request_id ASC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(backend)?;
+        rows.into_iter()
+            .map(|row| {
+                let status: String = row.try_get("status").map_err(backend)?;
+                Ok(ActionRequest {
+                    request_id: row.try_get("request_id").map_err(backend)?,
+                    requested_by: row.try_get("requested_by").map_err(backend)?,
+                    intent_id_hex: row.try_get("intent_id_hex").map_err(backend)?,
+                    status: str_to_action_request_status(&status)?,
+                    created_at_unix_seconds: row.try_get("created_at").map_err(backend)?,
+                })
+            })
+            .collect()
+    }
+
+    async fn compare_and_swap(
+        &self,
+        request_id: &str,
+        expected_version: i64,
+        new_status: ActionRequestStatus,
+    ) -> StorageResult<CasOutcome> {
+        // Exactly one caller with the matching version wins the conditional update.
+        let updated = sqlx::query(
+            "UPDATE action_requests SET version = version + 1, status = $3 \
+             WHERE request_id = $1 AND version = $2 RETURNING version",
+        )
+        .bind(request_id)
+        .bind(expected_version)
+        .bind(action_request_status_to_str(&new_status))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(backend)?;
+
+        if let Some(row) = updated {
+            return Ok(CasOutcome::Applied {
+                new_version: row.try_get("version").map_err(backend)?,
+            });
+        }
+        // No row updated: distinguish a version conflict from a missing request.
+        let current = sqlx::query("SELECT version FROM action_requests WHERE request_id = $1")
+            .bind(request_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(backend)?;
+        match current {
+            Some(row) => Ok(CasOutcome::Conflict {
+                current_version: row.try_get("version").map_err(backend)?,
+            }),
+            None => Ok(CasOutcome::Missing),
+        }
+    }
+}
+
+/// Postgres approval-decision store. Decisions are immutable once recorded;
+/// corrections are append-only superseding records (Master Plan §59 D-06).
+#[derive(Clone)]
+pub struct PgApprovalDecisionStore {
+    pool: PgPool,
+}
+
+impl PgApprovalDecisionStore {
+    /// Wraps a pool.
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl ApprovalDecisionStore for PgApprovalDecisionStore {
+    async fn insert(&self, decision: ApprovalDecision) -> StorageResult<()> {
+        if decision.decision_id.is_empty() {
+            return Err(StorageError::EmptyField("decision_id"));
+        }
+        sqlx::query(
+            "INSERT INTO approval_decisions \
+             (decision_id, request_id, decided_by, decision, intent_id_hex, decided_at) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(&decision.decision_id)
+        .bind(&decision.request_id)
+        .bind(&decision.decided_by)
+        .bind(&decision.decision)
+        .bind(&decision.intent_id_hex)
+        .bind(decision.decided_at_unix_seconds)
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(())
+    }
+
+    async fn get(&self, decision_id: &str) -> StorageResult<Option<ApprovalDecision>> {
+        let row = sqlx::query(
+            "SELECT request_id, decided_by, decision, intent_id_hex, decided_at \
+             FROM approval_decisions WHERE decision_id = $1",
+        )
+        .bind(decision_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(backend)?;
+        row.map(|row| {
+            Ok(ApprovalDecision {
+                decision_id: decision_id.to_string(),
+                request_id: row.try_get("request_id").map_err(backend)?,
+                decided_by: row.try_get("decided_by").map_err(backend)?,
+                decision: row.try_get("decision").map_err(backend)?,
+                intent_id_hex: row.try_get("intent_id_hex").map_err(backend)?,
+                decided_at_unix_seconds: row.try_get("decided_at").map_err(backend)?,
+            })
+        })
+        .transpose()
+    }
+
+    async fn by_request(&self, request_id: &str) -> StorageResult<Vec<ApprovalDecision>> {
+        let rows = sqlx::query(
+            "SELECT decision_id, decided_by, decision, intent_id_hex, decided_at \
+             FROM approval_decisions WHERE request_id = $1 ORDER BY decided_at ASC, decision_id ASC",
+        )
+        .bind(request_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(backend)?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(ApprovalDecision {
+                    decision_id: row.try_get("decision_id").map_err(backend)?,
+                    request_id: request_id.to_string(),
+                    decided_by: row.try_get("decided_by").map_err(backend)?,
+                    decision: row.try_get("decision").map_err(backend)?,
+                    intent_id_hex: row.try_get("intent_id_hex").map_err(backend)?,
+                    decided_at_unix_seconds: row.try_get("decided_at").map_err(backend)?,
+                })
+            })
+            .collect()
     }
 }

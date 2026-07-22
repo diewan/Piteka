@@ -211,6 +211,65 @@ impl Default for TestPorts {
     }
 }
 
+/// PostgreSQL-backed ports for the live action-request approval workflow.
+///
+/// The counterpart to [`TestPorts`] for real deployments: the propose →
+/// approve/reject → revoke lifecycle is persisted to Postgres (the sole
+/// live-state authority) instead of in-memory maps, so approvals survive
+/// restarts and are visible to the read API and evidence feed. Each store is a
+/// cheap clone over a shared connection pool.
+#[derive(Clone)]
+pub struct LiveActionRequestPorts {
+    request_store: piteka_storage::postgres::PgActionRequestStore,
+    decision_store: piteka_storage::postgres::PgApprovalDecisionStore,
+    audit_log: piteka_storage::postgres::PgAuditLog,
+    clock: piteka_application::SystemClock,
+}
+
+impl LiveActionRequestPorts {
+    /// Connects a pool, runs migrations, and wires the live Postgres stores with
+    /// a system clock. All three stores share the one pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error if the pool cannot be established or migrations
+    /// fail.
+    pub async fn connect(database_url: &str) -> Result<Self, piteka_storage::StorageError> {
+        let pool = piteka_storage::postgres::connect(database_url).await?;
+        piteka_storage::postgres::run_migrations(&pool).await?;
+        Ok(Self {
+            request_store: piteka_storage::postgres::PgActionRequestStore::new(pool.clone()),
+            decision_store: piteka_storage::postgres::PgApprovalDecisionStore::new(pool.clone()),
+            audit_log: piteka_storage::postgres::PgAuditLog::new(pool),
+            clock: piteka_application::SystemClock,
+        })
+    }
+
+    /// Returns an action-request use case configured with these live ports.
+    #[must_use]
+    pub fn use_case(&self) -> ActionRequestUseCase<LiveActionRequestPorts> {
+        ActionRequestUseCase::new(self.clone())
+    }
+}
+
+impl piteka_application::ActionRequestPorts for LiveActionRequestPorts {
+    fn request_store(&self) -> &dyn ActionRequestStore {
+        &self.request_store
+    }
+
+    fn decision_store(&self) -> &dyn ApprovalDecisionStore {
+        &self.decision_store
+    }
+
+    fn audit_log(&self) -> &dyn AuditLog {
+        &self.audit_log
+    }
+
+    fn clock(&self) -> &dyn piteka_application::Clock {
+        &self.clock
+    }
+}
+
 /// A deterministic clock that steps forward by 1 second per call.
 #[derive(Default)]
 struct TestClock {
