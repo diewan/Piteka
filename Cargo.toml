@@ -56,6 +56,7 @@ piteka-github.workspace = true
 piteka-ports.workspace = true
 piteka-storage = { workspace = true, features = ["postgres"] }
 piteka-domain.workspace = true
+piteka-parwana.workspace = true
 piteka-api = { path = "apps/piteka-api" }
 piteka-mcp = { path = "apps/piteka-mcp" }
 tokio.workspace = true

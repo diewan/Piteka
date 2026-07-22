@@ -1913,6 +1913,7 @@ dependencies = [
  "piteka-github",
  "piteka-infra",
  "piteka-mcp",
+ "piteka-parwana",
  "piteka-ports",
  "piteka-storage",
  "serde",

@@ -45,6 +45,7 @@ use piteka_storage::{
 };
 
 pub mod agent;
+pub mod delegated_authority;
 
 pub use agent::{AgentActor, AgentError, DeploymentPlan};
 

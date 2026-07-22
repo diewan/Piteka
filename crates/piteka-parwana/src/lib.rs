@@ -40,6 +40,9 @@ pub mod protocol {
         IntentError, MandateSignatureEnvelope, ObjectVersion, ProfileCodec, ProfileDescriptor,
         ProfileId, ProfileRegistry, ProtocolVersion, RequiredContexts, RequiredContextsWire,
         VerificationContext, default_registry, github_deployment_descriptor,
+        AuthorityAuthenticity, AuthorityConclusion, AuthorityLink, AuthorityReason,
+        AuthorityReconstruction, AuthoritySourceCompleteness, MandateId,
+        AUTHORITY_RECONSTRUCTION_REGISTRY_ID, evaluate_authority_reconstruction,
     };
     pub use csv_sdk::accountability::{
         DB_MIGRATION_ACTION_TYPE, DB_MIGRATION_PROFILE_ID, DbMigrationIntentV1, MigrationDirection,
