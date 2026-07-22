@@ -42,7 +42,11 @@ if ! pg_isready -d "$DATABASE_URL" >/dev/null 2>&1; then
   echo "         Start it first, or the live webhook + read API will fail to bind." >&2
 fi
 
-(cd "$repo_dir" && nohup setsid cargo run -p piteka-web >>"$log_file" 2>&1 & echo $! >"$pid_file")
+(
+  cd "$repo_dir"
+  exec nohup setsid cargo run -p piteka-web >>"$log_file" 2>&1
+) &
+echo $! >"$pid_file"
 
 for _ in {1..120}; do
   if curl --fail --silent "$url/health" >/dev/null 2>&1; then
