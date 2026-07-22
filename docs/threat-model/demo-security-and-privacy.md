@@ -4,6 +4,9 @@ Status: reviewed for H-04 on 2026-07-19. Scope is the first vertical slice:
 one exact GitHub deployment is approved once, dispatched by Piteka, exported,
 and independently verified by Parwana.
 
+The risk-ranked scenario catalog and adversarial ownership map is maintained in
+[`accountability-fraud-abuse-matrix.md`](./accountability-fraud-abuse-matrix.md).
+
 ## Assets, boundaries, and trust
 
 The protected assets are mandate signing material, GitHub App and webhook

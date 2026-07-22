@@ -38,6 +38,7 @@ piteka-github = { path = "crates/piteka-github" }
 piteka-ui = { path = "crates/piteka-ui" }
 piteka-tuppira = { path = "crates/piteka-tuppira" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+tower-http = { version = "0.6", features = ["cors"] }
 
 [package]
 name = "piteka"

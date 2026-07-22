@@ -8,7 +8,8 @@
 #
 # Prereqs already up: Postgres :55432, piteka-web :3000 (DATABASE_URL + webhook
 # secret), evidence_feed :3200, tuppira-api :8081 + ingest --watch, cloudflared
-# tunnel → :3000 with the GitHub App webhook pointed at it.
+# tunnel → :3000 with the GitHub App webhook pointed at it. The supported
+# container path is `deployment/scripts/up.sh demo`, which starts the watcher.
 #
 # Each run needs a UNIQUE PITEKA_DEMO_RUN_ID (it seeds the deterministic
 # intent/mandate ids); a repeated id is idempotent and produces no new mandate.
@@ -48,5 +49,5 @@ echo "Mandate/attempt are now in Postgres; the receipt lands when GitHub deliver
 echo "the terminal deployment_status webhook. Watch it:"
 echo "  gh run watch --repo $SLUG \"\$(gh run list --repo $SLUG --event deployment --limit 1 --json databaseId --jq '.[0].databaseId')\""
 echo "  curl -s http://127.0.0.1:3000/api/v1/receipts | jq"
-echo "  tail -f \"$root\"/../*/scratchpad/tuppira-ingest.log 2>/dev/null || true"
+echo "  docker logs -f diewan-tuppira-ingest"
 echo "Journal: $PITEKA_DEMO_JOURNAL"
