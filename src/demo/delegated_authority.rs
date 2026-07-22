@@ -10,6 +10,13 @@ use piteka_parwana::protocol::{
     MandateId, evaluate_authority_reconstruction,
 };
 use serde::Serialize;
+use std::sync::Arc;
+
+use piteka_application::{
+    CaseUseCase, Clock, SessionAuthority, SessionSigner, Signature, SignatureAlgorithm,
+};
+use piteka_domain::{ConfiguredOrganization, SessionId, UserId};
+use piteka_storage::{EvidenceObjectStore, InMemoryEvidenceStore, InMemoryInvestigatorCaseStore};
 
 const EVALUATION_TIME: u64 = 1_800_000_000;
 const SCOPE: [u8; 32] = [0x5a; 32];
@@ -23,7 +30,18 @@ pub struct DelegationTrace {
     pub reconstruction_id: String,
     pub canonical_evidence_hex: String,
     pub identities: [&'static str; 4],
+    pub hemion_route: String,
     pub limitation: &'static str,
+}
+
+/// Append-only investigator-case projection created from exported evidence.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DelegationCaseTrace {
+    pub case_id: &'static str,
+    pub tenant_id: String,
+    pub version: i64,
+    pub evidence_digest: String,
+    pub event_kinds: Vec<String>,
 }
 
 /// A one-shot runner: a valid delegated action may be consumed once.
@@ -64,6 +82,107 @@ impl DelegatedAuthorityDemo {
             reconstruction(AuthoritySourceCompleteness::Withheld, false),
         )
     }
+
+    /// Store canonical evidence and exercise Piteka's append-only case use case.
+    pub async fn investigate(
+        &self,
+        trace: &DelegationTrace,
+    ) -> Result<DelegationCaseTrace, String> {
+        let evidence = Arc::new(InMemoryEvidenceStore::default());
+        let cases = Arc::new(InMemoryInvestigatorCaseStore::default());
+        let bytes =
+            hex::decode(&trace.canonical_evidence_hex).map_err(|error| error.to_string())?;
+        let digest = evidence
+            .put(&bytes)
+            .await
+            .map_err(|error| error.to_string())?;
+        let use_case = CaseUseCase::new(cases, evidence, DemoClock);
+        let session = auditor_session()?;
+        let case_id = "case-delegation-overreach";
+        let opened = use_case
+            .open(&session, case_id, "Delegated authority review")
+            .await
+            .map_err(|error| error.to_string())?;
+        let version = use_case
+            .attach_evidence(
+                &session,
+                case_id,
+                0,
+                "event-delegation-evidence",
+                &digest.to_hex(),
+                "Canonical Parwana authority reconstruction",
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        let version = use_case
+            .record_finding(
+                &session,
+                case_id,
+                version,
+                "event-delegation-finding",
+                &digest.to_hex(),
+                trace.reason_code,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        let history = use_case
+            .history(&session, case_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(DelegationCaseTrace {
+            case_id,
+            tenant_id: opened.tenant_id,
+            version,
+            evidence_digest: digest.to_hex(),
+            event_kinds: history.into_iter().map(|event| event.kind).collect(),
+        })
+    }
+}
+
+struct DemoSigner;
+
+impl SessionSigner for DemoSigner {
+    fn algorithm(&self) -> SignatureAlgorithm {
+        SignatureAlgorithm::DemoLocalV1
+    }
+
+    fn sign(&self, message: &[u8]) -> Signature {
+        Signature::new(
+            self.algorithm(),
+            vec![
+                message
+                    .iter()
+                    .fold(0_u8, |accumulator, byte| accumulator ^ byte),
+            ],
+        )
+    }
+
+    fn verify(&self, message: &[u8], signature: &Signature) -> bool {
+        self.sign(message) == *signature
+    }
+}
+
+#[derive(Clone, Copy)]
+struct DemoClock;
+
+impl Clock for DemoClock {
+    fn unix_seconds(&self) -> u64 {
+        EVALUATION_TIME
+    }
+}
+
+fn auditor_session() -> Result<piteka_application::AuthenticatedSession, String> {
+    let authority = SessionAuthority::new(DemoSigner, DemoClock, ConfiguredOrganization::demo());
+    let signed = authority
+        .issue(
+            &UserId::new("auditor").map_err(|error| error.to_string())?,
+            SessionId::from_bytes([0x44; 16]),
+            300,
+        )
+        .map_err(|error| error.to_string())?;
+    authority
+        .authenticate(&signed)
+        .map_err(|error| error.to_string())
 }
 
 fn reconstruction(
@@ -137,6 +256,7 @@ fn trace(
             "agent:deploy",
             "sub-agent:runner",
         ],
+        hemion_route: format!("/responsibility/{}", hex::encode(id.as_bytes())),
         limitation: "Compatible historical evidence is not an authorization or a mandate.",
     })
 }
@@ -180,5 +300,16 @@ mod tests {
                 .unwrap()
                 .contains("Authorized")
         );
+    }
+
+    #[tokio::test]
+    async fn overreach_opens_append_only_case_bound_to_canonical_evidence() {
+        let demo = DelegatedAuthorityDemo::default();
+        let trace = demo.overreach().unwrap();
+        let case = demo.investigate(&trace).await.unwrap();
+        assert_eq!(case.version, 2);
+        assert_eq!(case.event_kinds, ["evidence_attached", "finding_recorded"]);
+        assert_eq!(case.evidence_digest.len(), 64);
+        assert!(trace.hemion_route.starts_with("/responsibility/"));
     }
 }
