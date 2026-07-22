@@ -56,7 +56,9 @@ piteka-ports.workspace = true
 piteka-storage = { workspace = true, features = ["postgres"] }
 piteka-domain.workspace = true
 piteka-api = { path = "apps/piteka-api" }
+piteka-mcp = { path = "apps/piteka-mcp" }
 tokio.workspace = true
+async-trait.workspace = true
 sha2 = "0.10"
 hex = "0.4"
 serde = { version = "1", features = ["derive"] }
@@ -65,6 +67,7 @@ ed25519-dalek = "2"
 
 [dev-dependencies]
 piteka-domain.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints.rust]
 unsafe_code = "forbid"
