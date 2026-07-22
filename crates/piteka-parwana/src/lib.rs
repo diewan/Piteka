@@ -42,6 +42,10 @@ pub mod protocol {
         VerificationContext, default_registry, github_deployment_descriptor,
     };
     pub use csv_sdk::accountability::{
+        DB_MIGRATION_ACTION_TYPE, DB_MIGRATION_PROFILE_ID, DbMigrationIntentV1, MigrationDirection,
+        db_migration_descriptor,
+    };
+    pub use csv_sdk::accountability::{
         AnchorFinality, AnchorObservation, AnchorReconciliation, CHAIN_COMMITMENT_ANCHOR_MEDIA_TYPE,
         ChainAnchor, ChainAnchorAssessment, CommitmentAnchorRecord,
         EVIDENCE_CHAIN_COMMITMENT_ANCHOR, EVIDENCE_CSV_SEAL_COMMITMENT_ANCHOR,
@@ -51,6 +55,7 @@ pub mod protocol {
 }
 
 pub mod anchor;
+pub mod migration;
 
 use csv_sdk::accountability;
 
@@ -64,7 +69,7 @@ use protocol::{
 /// `=0.1.5` requirement on `csv-sdk`. Kept as a human-facing constant so the pin
 /// is auditable from a running Piteka; the binding compatibility check lives in
 /// [`verify_contract_versions`].
-pub const PINNED_CONTRACT_VERSION: &str = "0.1.8";
+pub const PINNED_CONTRACT_VERSION: &str = "0.1.9";
 
 /// Accountability protocol version (major, minor) this adapter is built against.
 pub const EXPECTED_PROTOCOL_VERSION: (u16, u16) = (0, 1);

@@ -4,6 +4,16 @@
 
 ### Added
 
+- **PROFILE-02 — second action profile (production database migration).**
+  A Piteka adapter (`piteka-parwana::migration`) normalizes untrusted migration
+  input into the registered `DbMigrationIntentV1` profile: it computes the exact
+  migration-plan digest itself (the agent never supplies a free-form digest) and
+  builds a canonical `ActionIntent` through the generic registry path. Every
+  security-relevant field (plan digest, direction, destructive flag, statement
+  count) is bound into the parameters commitment; presentation names never
+  displace the stable database/environment ids. Tests prove a changed plan
+  changes the commitment, display renames leave the stable target unchanged, and
+  invalid input fails closed. Contract pin bumped to `0.1.9`.
 - **ANCHOR-01 — on-chain commitment anchoring, off the dispatch hot path.**
   A new `ChainAnchorPort` (`piteka-ports`) with a `ChainAnchorRecord` DTO, a
   deterministic `LocalChainAnchor` adapter (`piteka-infra`) that anchors a

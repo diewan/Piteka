@@ -12,6 +12,9 @@ rust-version.workspace = true
 # (chain adapters requiring C libraries, tokio, wallet, native FS) are disabled;
 # only the explicitly selected Accountability capability is needed.
 [dependencies]
+# Opaque application-input commitment for the DB-migration adapter (PROFILE-02).
+# Not a protocol-object hash — those stay behind the csv-sdk facade.
+sha2 = "0.10"
 csv-sdk = { version = "=0.1.5", path = "../../../parwana/csv-sdk", default-features = false, features = ["std", "accountability"] }
 piteka-ports.workspace = true
 

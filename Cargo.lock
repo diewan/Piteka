@@ -2022,6 +2022,7 @@ version = "0.1.0"
 dependencies = [
  "csv-sdk",
  "piteka-ports",
+ "sha2",
 ]
 
 [[package]]
