@@ -13,15 +13,143 @@ use crate::digest::ContentDigest;
 use crate::error::{StorageError, StorageResult};
 use crate::model::{
     ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome,
-    EvidenceDescriptor, EvidenceNodeRecord, ExecutionAttempt, ExecutionAttemptState,
-    MandateProjection, ProtocolObjectRecord, ReceiptProjection, SealConsumptionProofRecord,
-    WebhookReceipt, WebhookRecordOutcome,
+    CaseAppendOutcome, CaseEvent, EvidenceDescriptor, EvidenceNodeRecord, ExecutionAttempt,
+    ExecutionAttemptState, InvestigatorCase, MandateProjection, ProtocolObjectRecord,
+    ReceiptProjection, SealConsumptionProofRecord, WebhookReceipt, WebhookRecordOutcome,
 };
 use crate::ports::{
     ActionRequestStore, ApprovalDecisionStore, AuditLog, EvidenceNodeStore, EvidenceObjectStore,
-    ExecutionAttemptStore, MandateProjectionStore, ProtocolObjectStore, ReceiptProjectionStore,
-    SealConsumptionStore, WebhookReceiptStore,
+    ExecutionAttemptStore, InvestigatorCaseStore, MandateProjectionStore, ProtocolObjectStore,
+    ReceiptProjectionStore, SealConsumptionStore, WebhookReceiptStore,
 };
+
+/// In-memory investigator-case repository enforcing tenant scope and append-only history.
+#[derive(Default)]
+pub struct InMemoryInvestigatorCaseStore {
+    cases: Mutex<HashMap<(String, String), InvestigatorCase>>,
+    events: Mutex<HashMap<(String, String), Vec<CaseEvent>>>,
+}
+
+#[async_trait]
+impl InvestigatorCaseStore for InMemoryInvestigatorCaseStore {
+    async fn create(&self, case: InvestigatorCase) -> StorageResult<()> {
+        if case.tenant_id.trim().is_empty() || case.case_id.trim().is_empty() {
+            return Err(StorageError::EmptyField("case_scope"));
+        }
+        if case.version != 0 {
+            return Err(StorageError::Backend(
+                "new investigator case must start at version zero".into(),
+            ));
+        }
+        let key = (case.tenant_id.clone(), case.case_id.clone());
+        let mut cases = self.cases.lock().expect("lock poisoned");
+        if cases.contains_key(&key) {
+            return Err(StorageError::Backend(
+                "investigator case already exists".into(),
+            ));
+        }
+        cases.insert(key, case);
+        Ok(())
+    }
+
+    async fn get(&self, tenant_id: &str, case_id: &str) -> StorageResult<Option<InvestigatorCase>> {
+        Ok(self
+            .cases
+            .lock()
+            .expect("lock poisoned")
+            .get(&(tenant_id.to_string(), case_id.to_string()))
+            .cloned())
+    }
+
+    async fn list(&self, tenant_id: &str) -> StorageResult<Vec<InvestigatorCase>> {
+        let mut cases = self
+            .cases
+            .lock()
+            .expect("lock poisoned")
+            .values()
+            .filter(|case| case.tenant_id == tenant_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        cases.sort_by(|left, right| left.case_id.cmp(&right.case_id));
+        Ok(cases)
+    }
+
+    async fn append(
+        &self,
+        tenant_id: &str,
+        case_id: &str,
+        expected_version: i64,
+        mut event: CaseEvent,
+    ) -> StorageResult<CaseAppendOutcome> {
+        if event.tenant_id != tenant_id || event.case_id != case_id {
+            return Err(StorageError::Backend("case event scope mismatch".into()));
+        }
+        let key = (tenant_id.to_string(), case_id.to_string());
+        let mut cases = self.cases.lock().expect("lock poisoned");
+        let Some(case) = cases.get_mut(&key) else {
+            return Ok(CaseAppendOutcome::Missing);
+        };
+        if case.version != expected_version {
+            return Ok(CaseAppendOutcome::Conflict {
+                current_version: case.version,
+            });
+        }
+        let mut events = self.events.lock().expect("lock poisoned");
+        if events
+            .values()
+            .flatten()
+            .any(|existing| existing.event_id == event.event_id)
+        {
+            return Err(StorageError::Backend("case event id already exists".into()));
+        }
+        case.version += 1;
+        event.sequence = case.version;
+        events.entry(key).or_default().push(event);
+        Ok(CaseAppendOutcome::Applied {
+            new_version: case.version,
+        })
+    }
+
+    async fn history(&self, tenant_id: &str, case_id: &str) -> StorageResult<Vec<CaseEvent>> {
+        if self.get(tenant_id, case_id).await?.is_none() {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .events
+            .lock()
+            .expect("lock poisoned")
+            .get(&(tenant_id.to_string(), case_id.to_string()))
+            .cloned()
+            .unwrap_or_default())
+    }
+}
+
+#[async_trait]
+impl InvestigatorCaseStore for std::sync::Arc<InMemoryInvestigatorCaseStore> {
+    async fn create(&self, case: InvestigatorCase) -> StorageResult<()> {
+        self.as_ref().create(case).await
+    }
+    async fn get(&self, tenant_id: &str, case_id: &str) -> StorageResult<Option<InvestigatorCase>> {
+        self.as_ref().get(tenant_id, case_id).await
+    }
+    async fn list(&self, tenant_id: &str) -> StorageResult<Vec<InvestigatorCase>> {
+        self.as_ref().list(tenant_id).await
+    }
+    async fn append(
+        &self,
+        tenant_id: &str,
+        case_id: &str,
+        expected_version: i64,
+        event: CaseEvent,
+    ) -> StorageResult<CaseAppendOutcome> {
+        self.as_ref()
+            .append(tenant_id, case_id, expected_version, event)
+            .await
+    }
+    async fn history(&self, tenant_id: &str, case_id: &str) -> StorageResult<Vec<CaseEvent>> {
+        self.as_ref().history(tenant_id, case_id).await
+    }
+}
 
 /// In-memory immutable protocol-object store.
 #[derive(Default)]

@@ -132,6 +132,8 @@ pub enum Capability {
     VerifyBundle,
     /// Inspect assurance dimensions and stated limitations.
     InspectAssurance,
+    /// Create and append to tenant-scoped investigator cases.
+    ManageInvestigatorCases,
 }
 
 /// A demo role. The first slice ships exactly these three local roles.
@@ -169,6 +171,7 @@ impl Role {
                 Capability::ReadScopedRecords,
                 Capability::VerifyBundle,
                 Capability::InspectAssurance,
+                Capability::ManageInvestigatorCases,
             ],
         }
     }

@@ -6,10 +6,35 @@ use crate::digest::ContentDigest;
 use crate::error::StorageResult;
 use crate::model::{
     ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome,
-    EvidenceDescriptor, EvidenceNodeRecord, ExecutionAttempt, MandateProjection,
-    ProtocolObjectRecord, ReceiptProjection, SealConsumptionProofRecord, WebhookReceipt,
-    WebhookRecordOutcome,
+    CaseAppendOutcome, CaseEvent, EvidenceDescriptor, EvidenceNodeRecord, ExecutionAttempt,
+    InvestigatorCase, MandateProjection, ProtocolObjectRecord, ReceiptProjection,
+    SealConsumptionProofRecord, WebhookReceipt, WebhookRecordOutcome,
 };
+
+/// Tenant-scoped, append-only investigator case repository.
+#[async_trait]
+pub trait InvestigatorCaseStore: Send + Sync {
+    /// Opens a case at version zero.
+    async fn create(&self, case: InvestigatorCase) -> StorageResult<()>;
+
+    /// Reads a case only inside the supplied tenant scope.
+    async fn get(&self, tenant_id: &str, case_id: &str) -> StorageResult<Option<InvestigatorCase>>;
+
+    /// Lists cases only inside the supplied tenant scope.
+    async fn list(&self, tenant_id: &str) -> StorageResult<Vec<InvestigatorCase>>;
+
+    /// Atomically appends an immutable event when `expected_version` matches.
+    async fn append(
+        &self,
+        tenant_id: &str,
+        case_id: &str,
+        expected_version: i64,
+        event: CaseEvent,
+    ) -> StorageResult<CaseAppendOutcome>;
+
+    /// Returns immutable history in sequence order within tenant scope.
+    async fn history(&self, tenant_id: &str, case_id: &str) -> StorageResult<Vec<CaseEvent>>;
+}
 
 /// Immutable, id-addressed storage for canonical Parwana objects.
 #[async_trait]

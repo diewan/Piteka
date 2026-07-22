@@ -4,6 +4,7 @@ pub mod action_request;
 pub mod anchor;
 pub mod authz;
 pub mod bundle_export;
+pub mod cases;
 pub mod dispatch;
 pub mod mcp;
 pub mod observation;
@@ -19,6 +20,8 @@ mod authz_tests;
 #[cfg(test)]
 mod bundle_export_tests;
 #[cfg(test)]
+mod cases_tests;
+#[cfg(test)]
 mod dispatch_tests;
 #[cfg(test)]
 mod receipt_production_tests;
@@ -33,6 +36,7 @@ pub use action_request::{
 };
 pub use anchor::{AnchorUseCase, AnchorUseCaseError};
 pub use authz::{ActionSensitivity, AuthorizationRequest, Denial, ReauthPolicy};
+pub use cases::{CaseUseCase, CaseUseCaseError};
 pub use dispatch::{
     DispatchError, DispatchOutcome, DispatchPorts, DispatchUseCase, Dispatched, ReservationFailed,
 };

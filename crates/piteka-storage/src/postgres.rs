@@ -12,18 +12,146 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use crate::error::{StorageError, StorageResult};
 use crate::model::{
     ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome,
-    EvidenceNodeRecord, EvidenceSource, ExecutionAttempt, ExecutionAttemptState, MandateProjection,
-    ProtocolObjectRecord, ReceiptOutcome, ReceiptProjection, SealConsumptionProofRecord,
-    WebhookReceipt, WebhookRecordOutcome,
+    CaseAppendOutcome, CaseEvent, EvidenceNodeRecord, EvidenceSource, ExecutionAttempt,
+    ExecutionAttemptState, InvestigatorCase, MandateProjection, ProtocolObjectRecord,
+    ReceiptOutcome, ReceiptProjection, SealConsumptionProofRecord, WebhookReceipt,
+    WebhookRecordOutcome,
 };
 use crate::ports::{
     ActionRequestStore, ApprovalDecisionStore, AuditLog, EvidenceNodeStore, ExecutionAttemptStore,
-    MandateProjectionStore, ProtocolObjectStore, ReceiptProjectionStore, SealConsumptionStore,
-    WebhookReceiptStore,
+    InvestigatorCaseStore, MandateProjectionStore, ProtocolObjectStore, ReceiptProjectionStore,
+    SealConsumptionStore, WebhookReceiptStore,
 };
 
 fn backend(error: sqlx::Error) -> StorageError {
     StorageError::Backend(error.to_string())
+}
+
+/// PostgreSQL tenant-scoped investigator-case store.
+#[derive(Clone)]
+pub struct PgInvestigatorCaseStore {
+    pool: PgPool,
+}
+
+impl PgInvestigatorCaseStore {
+    /// Wraps a pool.
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl InvestigatorCaseStore for PgInvestigatorCaseStore {
+    async fn create(&self, case: InvestigatorCase) -> StorageResult<()> {
+        if case.tenant_id.trim().is_empty()
+            || case.case_id.trim().is_empty()
+            || case.title.trim().is_empty()
+        {
+            return Err(StorageError::EmptyField("investigator_case"));
+        }
+        if case.version != 0 {
+            return Err(StorageError::Backend(
+                "new investigator case must start at version zero".into(),
+            ));
+        }
+        sqlx::query("INSERT INTO investigator_cases (tenant_id, case_id, version, title, opened_by, created_at) VALUES ($1, $2, 0, $3, $4, $5)")
+            .bind(&case.tenant_id).bind(&case.case_id).bind(&case.title)
+            .bind(&case.opened_by).bind(case.created_at_unix_seconds)
+            .execute(&self.pool).await.map_err(backend)?;
+        Ok(())
+    }
+
+    async fn get(&self, tenant_id: &str, case_id: &str) -> StorageResult<Option<InvestigatorCase>> {
+        let row = sqlx::query("SELECT version, title, opened_by, created_at FROM investigator_cases WHERE tenant_id = $1 AND case_id = $2")
+            .bind(tenant_id).bind(case_id).fetch_optional(&self.pool).await.map_err(backend)?;
+        row.map(|row| {
+            Ok(InvestigatorCase {
+                tenant_id: tenant_id.into(),
+                case_id: case_id.into(),
+                version: row.try_get("version").map_err(backend)?,
+                title: row.try_get("title").map_err(backend)?,
+                opened_by: row.try_get("opened_by").map_err(backend)?,
+                created_at_unix_seconds: row.try_get("created_at").map_err(backend)?,
+            })
+        })
+        .transpose()
+    }
+
+    async fn list(&self, tenant_id: &str) -> StorageResult<Vec<InvestigatorCase>> {
+        let rows = sqlx::query("SELECT case_id, version, title, opened_by, created_at FROM investigator_cases WHERE tenant_id = $1 ORDER BY case_id")
+            .bind(tenant_id).fetch_all(&self.pool).await.map_err(backend)?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(InvestigatorCase {
+                    tenant_id: tenant_id.into(),
+                    case_id: row.try_get("case_id").map_err(backend)?,
+                    version: row.try_get("version").map_err(backend)?,
+                    title: row.try_get("title").map_err(backend)?,
+                    opened_by: row.try_get("opened_by").map_err(backend)?,
+                    created_at_unix_seconds: row.try_get("created_at").map_err(backend)?,
+                })
+            })
+            .collect()
+    }
+
+    async fn append(
+        &self,
+        tenant_id: &str,
+        case_id: &str,
+        expected_version: i64,
+        event: CaseEvent,
+    ) -> StorageResult<CaseAppendOutcome> {
+        if event.tenant_id != tenant_id || event.case_id != case_id {
+            return Err(StorageError::Backend("case event scope mismatch".into()));
+        }
+        let mut tx = self.pool.begin().await.map_err(backend)?;
+        let current = sqlx::query("SELECT version FROM investigator_cases WHERE tenant_id = $1 AND case_id = $2 FOR UPDATE")
+            .bind(tenant_id).bind(case_id).fetch_optional(&mut *tx).await.map_err(backend)?;
+        let Some(current) = current else {
+            return Ok(CaseAppendOutcome::Missing);
+        };
+        let current_version: i64 = current.try_get("version").map_err(backend)?;
+        if current_version != expected_version {
+            return Ok(CaseAppendOutcome::Conflict { current_version });
+        }
+        let new_version = current_version + 1;
+        sqlx::query("INSERT INTO investigator_case_events (tenant_id, case_id, sequence, event_id, actor, kind, detail, evidence_digest_hex, occurred_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)")
+            .bind(tenant_id).bind(case_id).bind(new_version).bind(&event.event_id).bind(&event.actor)
+            .bind(&event.kind).bind(&event.detail).bind(&event.evidence_digest_hex).bind(event.occurred_at_unix_seconds)
+            .execute(&mut *tx).await.map_err(backend)?;
+        sqlx::query(
+            "UPDATE investigator_cases SET version = $3 WHERE tenant_id = $1 AND case_id = $2",
+        )
+        .bind(tenant_id)
+        .bind(case_id)
+        .bind(new_version)
+        .execute(&mut *tx)
+        .await
+        .map_err(backend)?;
+        tx.commit().await.map_err(backend)?;
+        Ok(CaseAppendOutcome::Applied { new_version })
+    }
+
+    async fn history(&self, tenant_id: &str, case_id: &str) -> StorageResult<Vec<CaseEvent>> {
+        let rows = sqlx::query("SELECT sequence, event_id, actor, kind, detail, evidence_digest_hex, occurred_at FROM investigator_case_events WHERE tenant_id = $1 AND case_id = $2 ORDER BY sequence")
+            .bind(tenant_id).bind(case_id).fetch_all(&self.pool).await.map_err(backend)?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(CaseEvent {
+                    event_id: row.try_get("event_id").map_err(backend)?,
+                    tenant_id: tenant_id.into(),
+                    case_id: case_id.into(),
+                    sequence: row.try_get("sequence").map_err(backend)?,
+                    actor: row.try_get("actor").map_err(backend)?,
+                    kind: row.try_get("kind").map_err(backend)?,
+                    detail: row.try_get("detail").map_err(backend)?,
+                    evidence_digest_hex: row.try_get("evidence_digest_hex").map_err(backend)?,
+                    occurred_at_unix_seconds: row.try_get("occurred_at").map_err(backend)?,
+                })
+            })
+            .collect()
+    }
 }
 
 /// Opens a connection pool.

@@ -28,19 +28,20 @@ pub use digest::ContentDigest;
 pub use error::{StorageError, StorageResult};
 pub use evidence::LocalEvidenceStore;
 pub use memory::{
-    InMemoryEvidenceNodeStore, InMemoryExecutionAttemptStore, InMemoryReceiptProjectionStore,
-    InMemorySealConsumptionStore,
+    InMemoryEvidenceNodeStore, InMemoryEvidenceStore, InMemoryExecutionAttemptStore,
+    InMemoryInvestigatorCaseStore, InMemoryReceiptProjectionStore, InMemorySealConsumptionStore,
 };
 pub use model::{
     ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome,
-    EvidenceDescriptor, EvidenceNodeRecord, EvidenceSource, ExecutionAttempt,
-    ExecutionAttemptState, MandateProjection, ProtocolObjectRecord, ReceiptOutcome,
-    ReceiptProjection, SealConsumptionProofRecord, WebhookReceipt, WebhookRecordOutcome,
+    CaseAppendOutcome, CaseEvent, EvidenceDescriptor, EvidenceNodeRecord, EvidenceSource,
+    ExecutionAttempt, ExecutionAttemptState, InvestigatorCase, MandateProjection,
+    ProtocolObjectRecord, ReceiptOutcome, ReceiptProjection, SealConsumptionProofRecord,
+    WebhookReceipt, WebhookRecordOutcome,
 };
 pub use ports::{
     ActionRequestStore, ApprovalDecisionStore, AuditLog, EvidenceNodeStore, EvidenceObjectStore,
-    ExecutionAttemptStore, MandateProjectionStore, ProtocolObjectStore, ReceiptProjectionStore,
-    SealConsumptionStore, WebhookReceiptStore,
+    ExecutionAttemptStore, InvestigatorCaseStore, MandateProjectionStore, ProtocolObjectStore,
+    ReceiptProjectionStore, SealConsumptionStore, WebhookReceiptStore,
 };
 
 #[cfg(test)]

@@ -171,6 +171,64 @@ pub struct ApprovalDecision {
     pub decided_at_unix_seconds: i64,
 }
 
+/// Tenant-scoped investigator case. Mutable state is limited to an optimistic
+/// version; all investigator content lives in append-only [`CaseEvent`] rows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InvestigatorCase {
+    /// Server-derived tenant identifier.
+    pub tenant_id: String,
+    /// Opaque case identifier unique within the tenant.
+    pub case_id: String,
+    /// Optimistic version incremented for every appended event.
+    pub version: i64,
+    /// Human-readable title fixed when the case is opened.
+    pub title: String,
+    /// Investigator identity that opened the case.
+    pub opened_by: String,
+    /// Creation time in Unix seconds.
+    pub created_at_unix_seconds: i64,
+}
+
+/// One immutable event in an investigator case history.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CaseEvent {
+    /// Globally unique event identifier.
+    pub event_id: String,
+    /// Tenant copied from the owning case and enforced by the repository.
+    pub tenant_id: String,
+    /// Owning case identifier.
+    pub case_id: String,
+    /// Strictly increasing sequence equal to the resulting case version.
+    pub sequence: i64,
+    /// Authenticated investigator identity.
+    pub actor: String,
+    /// Stable event kind such as `evidence_attached` or `finding_recorded`.
+    pub kind: String,
+    /// Investigator-authored detail; corrections are later events.
+    pub detail: String,
+    /// Immutable content digest required for evidence and finding events.
+    pub evidence_digest_hex: Option<String>,
+    /// Event time in Unix seconds.
+    pub occurred_at_unix_seconds: i64,
+}
+
+/// Result of appending a case event under optimistic concurrency.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaseAppendOutcome {
+    /// The event was appended atomically.
+    Applied {
+        /// New case version and event sequence.
+        new_version: i64,
+    },
+    /// Another writer changed the case first.
+    Conflict {
+        /// Current version observed by the repository.
+        current_version: i64,
+    },
+    /// No case exists in the supplied tenant scope.
+    Missing,
+}
+
 // ---------------------------------------------------------------------------
 // Execution attempt and receipt projections (E-03)
 // ---------------------------------------------------------------------------

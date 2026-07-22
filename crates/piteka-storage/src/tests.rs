@@ -7,16 +7,18 @@ use crate::digest::ContentDigest;
 use crate::error::StorageError;
 use crate::evidence::LocalEvidenceStore;
 use crate::memory::{
-    InMemoryAuditLog, InMemoryExecutionAttemptStore, InMemoryMandateProjectionStore,
-    InMemoryProtocolObjectStore, InMemoryReceiptProjectionStore, InMemoryWebhookReceiptStore,
+    InMemoryAuditLog, InMemoryExecutionAttemptStore, InMemoryInvestigatorCaseStore,
+    InMemoryMandateProjectionStore, InMemoryProtocolObjectStore, InMemoryReceiptProjectionStore,
+    InMemoryWebhookReceiptStore,
 };
 use crate::model::{
     AuditEvent, CasOutcome, EvidenceDescriptor, ExecutionAttempt, ExecutionAttemptState,
-    ProtocolObjectRecord, ReceiptOutcome, ReceiptProjection, WebhookReceipt, WebhookRecordOutcome,
+    InvestigatorCase, ProtocolObjectRecord, ReceiptOutcome, ReceiptProjection, WebhookReceipt,
+    WebhookRecordOutcome,
 };
 use crate::ports::{
-    AuditLog, EvidenceObjectStore, ExecutionAttemptStore, MandateProjectionStore,
-    ProtocolObjectStore, ReceiptProjectionStore, WebhookReceiptStore,
+    AuditLog, EvidenceObjectStore, ExecutionAttemptStore, InvestigatorCaseStore,
+    MandateProjectionStore, ProtocolObjectStore, ReceiptProjectionStore, WebhookReceiptStore,
 };
 
 fn record(id: &str, bytes: &[u8]) -> ProtocolObjectRecord {
@@ -25,6 +27,44 @@ fn record(id: &str, bytes: &[u8]) -> ProtocolObjectRecord {
         object_id_hex: id.to_string(),
         bytes: bytes.to_vec(),
     }
+}
+
+#[tokio::test]
+async fn investigator_cases_are_partitioned_by_tenant() {
+    let store = InMemoryInvestigatorCaseStore::default();
+    for tenant in ["tenant-a", "tenant-b"] {
+        store
+            .create(InvestigatorCase {
+                tenant_id: tenant.into(),
+                case_id: "same-id".into(),
+                version: 0,
+                title: tenant.into(),
+                opened_by: "investigator".into(),
+                created_at_unix_seconds: 1,
+            })
+            .await
+            .unwrap();
+    }
+    assert_eq!(store.list("tenant-a").await.unwrap().len(), 1);
+    assert_eq!(
+        store
+            .get("tenant-a", "same-id")
+            .await
+            .unwrap()
+            .unwrap()
+            .title,
+        "tenant-a"
+    );
+    assert_eq!(
+        store
+            .get("tenant-b", "same-id")
+            .await
+            .unwrap()
+            .unwrap()
+            .title,
+        "tenant-b"
+    );
+    assert!(store.get("tenant-c", "same-id").await.unwrap().is_none());
 }
 
 #[tokio::test]
