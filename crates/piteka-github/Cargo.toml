@@ -58,8 +58,9 @@ hmac = "0.12"
 hex = "0.4"
 thiserror = "2"
 base64 = "0.22"
-rsa = { version = "0.9", features = ["pem"] }
-pkcs8 = { version = "0.10", features = ["pem"] }
+# GitHub App authentication requires RS256. Keep only the parsing/signing
+# surface used by this adapter instead of enabling rsa's full default set.
+rsa = { version = "0.9", default-features = false, features = ["pem", "std"] }
 rand = "0.8"
 time = { version = "0.3", features = ["macros"] }
 serde = { version = "1", features = ["derive"] }

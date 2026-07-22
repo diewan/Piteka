@@ -61,8 +61,8 @@ use piteka_ports::github::{
     GitHubSecretReference, GitHubSecretResolver, GitHubWebhookPayload, GitHubWebhookSecret,
     WebhookSignatureResult,
 };
-use pkcs8::DecodePrivateKey;
 use rsa::pkcs1::DecodeRsaPrivateKey;
+use rsa::pkcs8::DecodePrivateKey;
 use rsa::signature::{SignatureEncoding, Signer};
 use serde::{Deserialize, Serialize};
 
@@ -810,6 +810,8 @@ mod tests {
     use piteka_ports::github::{
         GitHubAppPort, GitHubEnvironmentId, GitHubRepositoryName, GitHubWebhookPayload,
     };
+    use rsa::pkcs1::EncodeRsaPrivateKey;
+    use rsa::signature::Verifier;
 
     fn make_test_adapter() -> GitHubAppAdapter<InMemorySecretResolver> {
         let mut resolver = InMemorySecretResolver::new();
@@ -833,6 +835,47 @@ mod tests {
             OrganizationId::new("diewan-demo").unwrap(),
         )
         .expect("test adapter should be valid")
+    }
+
+    #[test]
+    fn github_app_jwt_is_rs256_signed_and_binds_claims() {
+        let private_key = rsa::RsaPrivateKey::new(&mut rand::thread_rng(), 2048)
+            .expect("test RSA key generation should succeed");
+        let pem = private_key
+            .to_pkcs1_pem(rsa::pkcs8::LineEnding::LF)
+            .expect("test RSA key should encode as PKCS#1 PEM");
+
+        let token = generate_jwt(42, pem.as_bytes(), 1_000)
+            .expect("a valid GitHub App key should produce a JWT");
+        let parts: Vec<_> = token.token.split('.').collect();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(token.expires_at, 1_600);
+
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(parts[1])
+            .expect("JWT payload should be base64url");
+        assert_eq!(
+            std::str::from_utf8(&payload).unwrap(),
+            r#"{"iat":1000,"exp":1600,"iss":"42"}"#
+        );
+
+        let signature_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(parts[2])
+            .expect("JWT signature should be base64url");
+        let signature = rsa::pkcs1v15::Signature::try_from(signature_bytes.as_slice())
+            .expect("JWT signature should have the RSA modulus length");
+        rsa::pkcs1v15::VerifyingKey::<sha2::Sha256>::new(private_key.to_public_key())
+            .verify(format!("{}.{}", parts[0], parts[1]).as_bytes(), &signature)
+            .expect("JWT signature should verify with the matching public key");
+    }
+
+    #[test]
+    fn github_app_jwt_rejects_malformed_private_keys_without_exposing_bytes() {
+        let secret = b"not-a-private-key";
+        let error = generate_jwt(42, secret, 1_000).expect_err("malformed keys must fail closed");
+        let message = error.to_string();
+        assert!(message.contains("invalid GitHub App private key"));
+        assert!(!message.contains(std::str::from_utf8(secret).unwrap()));
     }
 
     #[tokio::test]

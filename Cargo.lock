@@ -1984,7 +1984,6 @@ dependencies = [
  "piteka-domain",
  "piteka-parwana",
  "piteka-ports",
- "pkcs8",
  "rand 0.8.7",
  "reqwest",
  "rsa",
