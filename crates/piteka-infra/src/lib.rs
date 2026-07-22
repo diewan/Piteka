@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod anchor;
+pub mod chain_anchor;
 
 pub use anchor::LocalCsvSealAnchor;
 

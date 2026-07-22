@@ -23,6 +23,7 @@
 //! parameters — not display names.
 
 pub mod anchor;
+pub mod chain_anchor;
 pub mod github;
 
 pub use anchor::{

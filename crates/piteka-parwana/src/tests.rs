@@ -44,7 +44,7 @@ fn valid_intent() -> ActionIntent {
 #[test]
 fn bind_reports_the_pinned_contract() {
     let contract = ParwanaContract::bind().expect("linked SDK matches the pinned contract");
-    assert_eq!(contract.contract_version(), "0.1.7");
+    assert_eq!(contract.contract_version(), "0.1.8");
     assert_eq!(contract.contract_version(), PINNED_CONTRACT_VERSION);
     assert_eq!(contract.versions(), ContractVersions::expected());
 }
