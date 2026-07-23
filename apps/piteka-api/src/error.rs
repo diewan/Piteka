@@ -171,6 +171,15 @@ impl From<piteka_application::ActionRequestUseCaseError> for ApiError {
                 expected_version,
                 current_version,
             },
+            piteka_application::ActionRequestUseCaseError::IntentMismatch {
+                expected,
+                submitted,
+            } => Self::bad_request(
+                "INTENT_MISMATCH",
+                format!(
+                    "Approval was bound to a different intent: expected {expected}, submitted {submitted:?}"
+                ),
+            ),
         }
     }
 }

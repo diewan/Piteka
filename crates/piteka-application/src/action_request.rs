@@ -75,6 +75,12 @@ pub enum ActionRequestUseCaseError {
         expected_version: i64,
         current_version: i64,
     },
+    /// The digest submitted by the approval ceremony differs from the
+    /// server-stored canonical intent.
+    IntentMismatch {
+        expected: String,
+        submitted: Option<String>,
+    },
 }
 
 impl From<StorageError> for ActionRequestUseCaseError {
@@ -102,6 +108,13 @@ impl core::fmt::Display for ActionRequestUseCaseError {
                 f,
                 "optimistic concurrency conflict: expected version {}, current version {}",
                 expected_version, current_version
+            ),
+            Self::IntentMismatch {
+                expected,
+                submitted,
+            } => write!(
+                f,
+                "approval intent mismatch: expected {expected}, submitted {submitted:?}"
             ),
         }
     }
@@ -237,6 +250,14 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
             return Err(ActionRequestUseCaseError::InvalidTransition {
                 current: request.status,
                 attempted: "approve",
+            });
+        }
+        if let Some(expected) = &request.intent_id_hex
+            && intent_id_hex.as_ref() != Some(expected)
+        {
+            return Err(ActionRequestUseCaseError::IntentMismatch {
+                expected: expected.clone(),
+                submitted: intent_id_hex,
             });
         }
 

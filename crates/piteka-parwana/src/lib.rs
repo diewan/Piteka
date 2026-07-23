@@ -35,11 +35,13 @@ pub mod protocol {
     pub use csv_sdk::accountability::{
         ACCOUNTABILITY_OBJECT_VERSION, ACCOUNTABILITY_PROTOCOL_VERSION, AccountabilityObjectKind,
         ActionIntent, ActionIntentWire, ActionMandate, AssuranceProfile,
-        CanonicalAccountabilityObjectWire, DisputeBundle, EvidenceNode, ExecutionAttempt,
-        ExecutionReceipt, GateProfileId, GitHubDeploymentIntentV1, GitHubDeploymentIntentV1Wire,
-        IntentError, MandateSignatureEnvelope, ObjectVersion, ProfileCodec, ProfileDescriptor,
+        CanonicalAccountabilityObjectWire, DisclosedObject, DisputeBundle, EvidenceKind,
+        EvidenceNode, EvidenceNodeId, ExecutionAttempt, ExecutionReceipt, GateProfileId,
+        GitHubDeploymentIntentV1, GitHubDeploymentIntentV1Wire, IntentError, IntentId,
+        MandateSignatureEnvelope, ObjectVersion, ProfileCodec, ProfileDescriptor,
         ProfileId, ProfileRegistry, ProtocolVersion, RequiredContexts, RequiredContextsWire,
-        VerificationContext, default_registry, github_deployment_descriptor,
+        SourceLocator, VerificationContext, WithheldObject, bundle_object_digest,
+        default_registry, github_deployment_descriptor, validate_evidence_graph,
         AuthorityAuthenticity, AuthorityConclusion, AuthorityLink, AuthorityReason,
         AuthorityReconstruction, AuthoritySourceCompleteness, MandateId,
         AUTHORITY_RECONSTRUCTION_REGISTRY_ID, evaluate_authority_reconstruction,
@@ -47,6 +49,10 @@ pub mod protocol {
     pub use csv_sdk::accountability::{
         DB_MIGRATION_ACTION_TYPE, DB_MIGRATION_PROFILE_ID, DbMigrationIntentV1, MigrationDirection,
         db_migration_descriptor,
+    };
+    pub use csv_sdk::accountability::{
+        PAYMENT_ACTION_TYPE, PAYMENT_PROFILE_ID, PaymentCodec, PaymentIntentV1,
+        payment_descriptor,
     };
     pub use csv_sdk::accountability::{
         AnchorFinality, AnchorObservation, AnchorReconciliation, CHAIN_COMMITMENT_ANCHOR_MEDIA_TYPE,

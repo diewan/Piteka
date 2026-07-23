@@ -2091,7 +2091,9 @@ dependencies = [
 name = "piteka-worker"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "piteka-application",
+ "tokio",
 ]
 
 [[package]]

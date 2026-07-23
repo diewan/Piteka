@@ -6,6 +6,7 @@ pub mod authz;
 pub mod bundle_export;
 pub mod cases;
 pub mod dispatch;
+pub mod hardening;
 pub mod mcp;
 pub mod observation;
 pub mod receipt_production;
@@ -39,6 +40,11 @@ pub use authz::{ActionSensitivity, AuthorizationRequest, Denial, ReauthPolicy};
 pub use cases::{CaseUseCase, CaseUseCaseError};
 pub use dispatch::{
     DispatchError, DispatchOutcome, DispatchPorts, DispatchUseCase, Dispatched, ReservationFailed,
+};
+pub use hardening::{
+    ApprovalCeremony, ApprovalCeremonyError, ApprovalChallenge, ApprovalProof, AuditSink,
+    CanonicalIntent, IntentBindingError, KeyPurpose, KeyStatus, ManagedKeyId, ManagedSignature,
+    ProductionSigner, SigningError, WorkerCapability, WorkerCapabilityError,
 };
 pub use observation::{
     EvidenceGap, Observation, ObservationError, ObservationPort, ObservationQuery,

@@ -13,6 +13,8 @@
 use piteka_application::{AuthenticatedSession, AuthorizationRequest, Clock, Denial, ReauthPolicy};
 use piteka_storage::{AuditEvent, AuditLog, StorageError, TenantScope};
 
+pub mod oidc;
+
 /// Clear warning that the demo identity layer is not production-grade.
 pub const NON_PRODUCTION_IDENTITY_WARNING: &str = "Non-production identity: demo sessions are \
 signed with the local DemoLocalV1 signer and are not backed by OIDC/SSO or a KMS. Do not use for \

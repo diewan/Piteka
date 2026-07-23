@@ -16,6 +16,22 @@ use axum::{
 use tower_service::Service;
 
 #[test]
+fn approval_summary_has_one_visible_and_submitted_digest_with_accessible_context() {
+    let summary = crate::ApprovalSummary::new(piteka_application::CanonicalIntent {
+        tenant_id: "tenant-a".into(),
+        request_id: "request-1".into(),
+        environment: "production".into(),
+        repository: "acme/<service>".into(),
+        revision: "abc123".into(),
+    });
+    let html = summary.render_security_context();
+    assert_eq!(html.matches(&summary.digest_hex).count(), 2);
+    assert!(html.contains("aria-labelledby=\"approval-context-title\""));
+    assert!(html.contains("aria-describedby=\"intent-digest\""));
+    assert!(html.contains("acme/&lt;service&gt;"));
+}
+
+#[test]
 fn replay_rejection_is_visible_accessible_and_evidence_backed() {
     let rejection = piteka_application::dispatch::ReplayRejection {
         reason_code: "MANDATE.REPLAY_DETECTED",

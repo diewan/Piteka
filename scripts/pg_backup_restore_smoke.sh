@@ -31,9 +31,9 @@ done
 
 echo "2. insert a canonical protocol object"
 psql -v ON_ERROR_STOP=1 -q -d "$SRC_DB" -c \
-    "INSERT INTO protocol_objects (object_id_hex, kind, bytes) VALUES ('aa', 'action_intent', '\\x0102')"
+    "INSERT INTO protocol_objects (tenant_id, object_id_hex, kind, bytes) VALUES ('backup-smoke', 'aa', 'action_intent', '\\x0102')"
 psql -v ON_ERROR_STOP=1 -q -d "$SRC_DB" -c \
-    "INSERT INTO evidence_nodes (node_id_hex, registry_id, source, producer_identity, collected_at, content_digest, media_type, disclosure_classification) VALUES ('node-aa', 'registry-v1', 'provider', 'github-app:1', 1, 'digest-aa', 'application/json', 'pilot-restricted')"
+    "INSERT INTO evidence_nodes (tenant_id, node_id_hex, registry_id, source, producer_identity, collected_at, content_digest, media_type, disclosure_classification) VALUES ('backup-smoke', 'node-aa', 'registry-v1', 'provider', 'github-app:1', 1, 'digest-aa', 'application/json', 'pilot-restricted')"
 
 echo "3. back up with pg_dump"
 pg_dump --format=custom --file="$DUMP_FILE" "$SRC_DB"
@@ -43,13 +43,13 @@ createdb "$DST_DB"
 pg_restore --no-owner --dbname="$DST_DB" "$DUMP_FILE"
 
 echo "5. verify the object survived the restore"
-COUNT="$(psql -tA -d "$DST_DB" -c "SELECT count(*) FROM protocol_objects WHERE object_id_hex = 'aa'")"
+COUNT="$(psql -tA -d "$DST_DB" -c "SELECT count(*) FROM protocol_objects WHERE tenant_id = 'backup-smoke' AND object_id_hex = 'aa'")"
 if [ "$COUNT" != "1" ]; then
     echo "FAIL: restored database is missing the protocol object (count=$COUNT)" >&2
     exit 1
 fi
 
-EVIDENCE_COUNT="$(psql -tA -d "$DST_DB" -c "SELECT count(*) FROM evidence_nodes WHERE node_id_hex = 'node-aa' AND disclosure_classification = 'pilot-restricted'")"
+EVIDENCE_COUNT="$(psql -tA -d "$DST_DB" -c "SELECT count(*) FROM evidence_nodes WHERE tenant_id = 'backup-smoke' AND node_id_hex = 'node-aa' AND disclosure_classification = 'pilot-restricted'")"
 if [ "$EVIDENCE_COUNT" != "1" ]; then
     echo "FAIL: restored database is missing the evidence node (count=$EVIDENCE_COUNT)" >&2
     exit 1

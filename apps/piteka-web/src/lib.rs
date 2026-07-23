@@ -24,6 +24,54 @@ use axum::{Router, response::Html, routing::get};
 use piteka_application::{ActionRequestPorts, ActionRequestUseCase};
 use serde::Deserialize;
 
+/// Server-derived approval presentation. The visible digest and submitted
+/// digest are populated from the same immutable field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApprovalSummary {
+    /// Exact canonical intent.
+    pub intent: piteka_application::CanonicalIntent,
+    /// Digest both displayed and submitted.
+    pub digest_hex: String,
+}
+
+impl ApprovalSummary {
+    /// Creates a summary only from the canonical server-side intent.
+    pub fn new(intent: piteka_application::CanonicalIntent) -> Self {
+        let digest_hex = intent.digest_hex();
+        Self { intent, digest_hex }
+    }
+
+    /// Renders an accessible security context. The mutation handler must still
+    /// verify this digest against a freshly loaded canonical intent.
+    pub fn render_security_context(&self) -> String {
+        format!(
+            "<section aria-labelledby=\"approval-context-title\">\
+             <h2 id=\"approval-context-title\">Exact production intent</h2>\
+             <dl><dt>Environment</dt><dd>{}</dd>\
+             <dt>Repository</dt><dd>{}</dd>\
+             <dt>Revision</dt><dd>{}</dd>\
+             <dt>Intent digest</dt><dd id=\"intent-digest\"><code>{}</code></dd></dl>\
+             <input type=\"hidden\" name=\"displayed_intent_digest\" value=\"{}\" \
+             aria-describedby=\"intent-digest\">\
+             </section>",
+            escape_html(&self.intent.environment),
+            escape_html(&self.intent.repository),
+            escape_html(&self.intent.revision),
+            self.digest_hex,
+            self.digest_hex,
+        )
+    }
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
 /// Renders the replay-rejection evidence returned by the authoritative
 /// dispatch use case. Keeping this renderer input typed prevents navigation or
 /// browser state from manufacturing a rejection.

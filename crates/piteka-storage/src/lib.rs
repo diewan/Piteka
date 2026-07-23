@@ -17,6 +17,7 @@
 pub mod digest;
 pub mod error;
 pub mod evidence;
+pub mod hardening;
 pub mod memory;
 pub mod model;
 pub mod ports;
@@ -27,6 +28,11 @@ pub mod postgres;
 pub use digest::ContentDigest;
 pub use error::{StorageError, StorageResult};
 pub use evidence::LocalEvidenceStore;
+pub use hardening::{
+    DurableOutbox, EvidenceRetention, ImmutableEvidenceStore, LegalHold, ObjectStoreError,
+    OutboxError, OutboxEvent, OutboxLease, OutboxStatus, RetentionClass, RetentionError, Tombstone,
+    VersionedEvidence,
+};
 pub use memory::{
     InMemoryEvidenceNodeStore, InMemoryEvidenceStore, InMemoryExecutionAttemptStore,
     InMemoryInvestigatorCaseStore, InMemoryReceiptProjectionStore, InMemorySealConsumptionStore,

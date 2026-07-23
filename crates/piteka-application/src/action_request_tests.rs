@@ -327,15 +327,19 @@ async fn intent_id_is_bound_to_approval_not_prompt_text() {
 }
 
 #[tokio::test]
-async fn approve_with_different_intent_digest_still_succeeds() {
+async fn approve_with_different_intent_digest_fails_before_mutation() {
     let clock = StepClock::at(1_000);
     let uc = use_case(clock.clone());
 
-    // Request created without intent.
-    uc.propose("req-1", requester(), None).await.unwrap();
+    uc.propose(
+        "req-1",
+        requester(),
+        Some("intent-server-canonical".to_string()),
+    )
+    .await
+    .unwrap();
 
-    // Approver reviews and approves with the intent they saw.
-    let Approved { decision, .. } = uc
+    let error = uc
         .approve(
             "req-1",
             approver(),
@@ -343,11 +347,14 @@ async fn approve_with_different_intent_digest_still_succeeds() {
             1,
         )
         .await
-        .unwrap();
-
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ActionRequestUseCaseError::IntentMismatch { .. }
+    ));
     assert_eq!(
-        decision.intent_id_hex,
-        Some("intent-reviewed-xyz".to_string())
+        uc.list_requests().await.unwrap()[0].status,
+        ActionRequestStatus::Pending
     );
 }
 
