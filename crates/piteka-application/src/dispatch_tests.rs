@@ -22,6 +22,10 @@ use piteka_storage::ports::{
     ActionRequestStore, ApprovalDecisionStore, AuditLog, ExecutionAttemptStore,
     MandateProjectionStore, ReceiptProjectionStore,
 };
+
+fn tenant() -> piteka_storage::TenantScope {
+    piteka_storage::TenantScope::new("test-tenant").unwrap()
+}
 use piteka_storage::{ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent};
 
 /// Deterministic test clock.
@@ -74,156 +78,6 @@ impl TestPorts {
     }
 }
 
-#[async_trait::async_trait]
-impl ActionRequestStore for TestPorts {
-    async fn insert(&self, request: ActionRequest) -> Result<(), piteka_storage::StorageError> {
-        self.request_store.insert(request).await
-    }
-    async fn get(
-        &self,
-        request_id: &str,
-    ) -> Result<Option<ActionRequest>, piteka_storage::StorageError> {
-        self.request_store.get(request_id).await
-    }
-    async fn list(&self) -> Result<Vec<ActionRequest>, piteka_storage::StorageError> {
-        self.request_store.list().await
-    }
-    async fn compare_and_swap(
-        &self,
-        request_id: &str,
-        expected_version: i64,
-        new_status: ActionRequestStatus,
-    ) -> Result<piteka_storage::CasOutcome, piteka_storage::StorageError> {
-        self.request_store
-            .compare_and_swap(request_id, expected_version, new_status)
-            .await
-    }
-}
-
-#[async_trait::async_trait]
-impl ApprovalDecisionStore for TestPorts {
-    async fn insert(&self, decision: ApprovalDecision) -> Result<(), piteka_storage::StorageError> {
-        self.decision_store.insert(decision).await
-    }
-    async fn get(
-        &self,
-        decision_id: &str,
-    ) -> Result<Option<ApprovalDecision>, piteka_storage::StorageError> {
-        self.decision_store.get(decision_id).await
-    }
-    async fn by_request(
-        &self,
-        request_id: &str,
-    ) -> Result<Vec<ApprovalDecision>, piteka_storage::StorageError> {
-        self.decision_store.by_request(request_id).await
-    }
-}
-
-#[async_trait::async_trait]
-impl MandateProjectionStore for TestPorts {
-    async fn insert(
-        &self,
-        mandate_id_hex: &str,
-        state: &str,
-    ) -> Result<(), piteka_storage::StorageError> {
-        self.mandate_store.insert(mandate_id_hex, state).await
-    }
-    async fn get(
-        &self,
-        mandate_id_hex: &str,
-    ) -> Result<Option<piteka_storage::MandateProjection>, piteka_storage::StorageError> {
-        self.mandate_store.get(mandate_id_hex).await
-    }
-    async fn compare_and_swap(
-        &self,
-        mandate_id_hex: &str,
-        expected_version: i64,
-        new_state: &str,
-    ) -> Result<piteka_storage::CasOutcome, piteka_storage::StorageError> {
-        self.mandate_store
-            .compare_and_swap(mandate_id_hex, expected_version, new_state)
-            .await
-    }
-}
-
-#[async_trait::async_trait]
-impl ExecutionAttemptStore for TestPorts {
-    async fn insert(
-        &self,
-        attempt: piteka_storage::ExecutionAttempt,
-    ) -> Result<(), piteka_storage::StorageError> {
-        self.attempt_store.insert(attempt).await
-    }
-    async fn get(
-        &self,
-        attempt_id_hex: &str,
-    ) -> Result<Option<piteka_storage::ExecutionAttempt>, piteka_storage::StorageError> {
-        self.attempt_store.get(attempt_id_hex).await
-    }
-    async fn update_state(
-        &self,
-        attempt_id_hex: &str,
-        new_state: ExecutionAttemptState,
-    ) -> Result<(), piteka_storage::StorageError> {
-        self.attempt_store
-            .update_state(attempt_id_hex, new_state)
-            .await
-    }
-    async fn update_deployment_id(
-        &self,
-        attempt_id_hex: &str,
-        deployment_id: u64,
-    ) -> Result<(), piteka_storage::StorageError> {
-        self.attempt_store
-            .update_deployment_id(attempt_id_hex, deployment_id)
-            .await
-    }
-    async fn by_mandate(
-        &self,
-        mandate_id_hex: &str,
-    ) -> Result<Vec<piteka_storage::ExecutionAttempt>, piteka_storage::StorageError> {
-        self.attempt_store.by_mandate(mandate_id_hex).await
-    }
-    async fn by_deployment_id(
-        &self,
-        deployment_id: u64,
-    ) -> Result<Option<piteka_storage::ExecutionAttempt>, piteka_storage::StorageError> {
-        self.attempt_store.by_deployment_id(deployment_id).await
-    }
-}
-
-#[async_trait::async_trait]
-impl ReceiptProjectionStore for TestPorts {
-    async fn insert(
-        &self,
-        receipt: piteka_storage::ReceiptProjection,
-    ) -> Result<(), piteka_storage::StorageError> {
-        self.receipt_store.insert(receipt).await
-    }
-    async fn get(
-        &self,
-        receipt_id_hex: &str,
-    ) -> Result<Option<piteka_storage::ReceiptProjection>, piteka_storage::StorageError> {
-        self.receipt_store.get(receipt_id_hex).await
-    }
-    async fn by_mandate(
-        &self,
-        mandate_id_hex: &str,
-    ) -> Result<Vec<piteka_storage::ReceiptProjection>, piteka_storage::StorageError> {
-        self.receipt_store.by_mandate(mandate_id_hex).await
-    }
-}
-
-#[async_trait::async_trait]
-impl AuditLog for TestPorts {
-    async fn append(&self, event: AuditEvent) -> Result<(), piteka_storage::StorageError> {
-        self.audit_log.append(event).await
-    }
-    async fn recent(&self, limit: usize) -> Result<Vec<AuditEvent>, piteka_storage::StorageError> {
-        self.audit_log.recent(limit).await
-    }
-}
-
 impl DispatchPorts for TestPorts {
     fn request_store(&self) -> &dyn ActionRequestStore {
         &self.request_store
@@ -246,7 +100,7 @@ impl DispatchPorts for TestPorts {
 }
 
 fn use_case(ports: &TestPorts) -> DispatchUseCase<TestPorts> {
-    DispatchUseCase::new(ports.clone())
+    DispatchUseCase::new(tenant(), ports.clone())
 }
 
 fn requester() -> UserId {
@@ -268,12 +122,16 @@ async fn setup_approved_request(ports: &TestPorts, request_id: &str, mandate_id_
         status: ActionRequestStatus::Approved,
         created_at_unix_seconds: now,
     };
-    ports.request_store.insert(request).await.unwrap();
+    ports
+        .request_store
+        .insert(&tenant(), request)
+        .await
+        .unwrap();
 
     // Create the mandate projection in Issued state.
     ports
         .mandate_store
-        .insert(mandate_id_hex, "issued")
+        .insert(&tenant(), mandate_id_hex, "issued")
         .await
         .unwrap();
 }
@@ -311,13 +169,18 @@ async fn reserve_succeeds_for_approved_request() {
     }
 
     // Verify the mandate is now reserved.
-    let mandate = ports.mandate_store.get("mandate-1").await.unwrap().unwrap();
+    let mandate = ports
+        .mandate_store
+        .get(&tenant(), "mandate-1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(mandate.state, "reserved");
 
     // Verify the attempt was created.
     let attempt = ports
         .attempt_store
-        .get("att-mandate-1")
+        .get(&tenant(), "att-mandate-1")
         .await
         .unwrap()
         .unwrap();
@@ -340,7 +203,11 @@ async fn reserve_rejects_non_approved_request() {
         status: ActionRequestStatus::Pending,
         created_at_unix_seconds: now,
     };
-    ports.request_store.insert(request).await.unwrap();
+    ports
+        .request_store
+        .insert(&tenant(), request)
+        .await
+        .unwrap();
 
     let result = uc
         .reserve(
@@ -407,7 +274,11 @@ async fn one_concurrent_winner_on_reserve() {
     }
 
     // Verify only one attempt was created.
-    let attempts = ports.attempt_store.by_mandate("mandate-1").await.unwrap();
+    let attempts = ports
+        .attempt_store
+        .by_mandate(&tenant(), "mandate-1")
+        .await
+        .unwrap();
     assert_eq!(attempts.len(), 1);
 }
 
@@ -452,15 +323,29 @@ async fn complete_dispatch_consumes_mandate_on_provider_acceptance() {
     .unwrap();
 
     // Verify mandate is consumed.
-    let mandate = ports.mandate_store.get("mandate-1").await.unwrap().unwrap();
+    let mandate = ports
+        .mandate_store
+        .get(&tenant(), "mandate-1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(mandate.state, "consumed");
 
     // Verify attempt is Accepted.
-    let attempt = ports.attempt_store.get(&attempt_id).await.unwrap().unwrap();
+    let attempt = ports
+        .attempt_store
+        .get(&tenant(), &attempt_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(attempt.state, ExecutionAttemptState::Accepted);
 
     // Receipt production waits for authenticated provider evidence.
-    let receipts = ports.receipt_store.by_mandate("mandate-1").await.unwrap();
+    let receipts = ports
+        .receipt_store
+        .by_mandate(&tenant(), "mandate-1")
+        .await
+        .unwrap();
     assert!(receipts.is_empty());
 }
 
@@ -505,15 +390,29 @@ async fn complete_dispatch_quarantines_mandate_on_provider_failure() {
     .unwrap();
 
     // Verify mandate is quarantined.
-    let mandate = ports.mandate_store.get("mandate-1").await.unwrap().unwrap();
+    let mandate = ports
+        .mandate_store
+        .get(&tenant(), "mandate-1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(mandate.state, "quarantined");
 
     // Verify attempt is OutcomeAmbiguous.
-    let attempt = ports.attempt_store.get(&attempt_id).await.unwrap().unwrap();
+    let attempt = ports
+        .attempt_store
+        .get(&tenant(), &attempt_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(attempt.state, ExecutionAttemptState::OutcomeAmbiguous);
 
     // Ambiguity does not fabricate a receipt.
-    let receipts = ports.receipt_store.by_mandate("mandate-1").await.unwrap();
+    let receipts = ports
+        .receipt_store
+        .by_mandate(&tenant(), "mandate-1")
+        .await
+        .unwrap();
     assert!(receipts.is_empty());
 }
 
@@ -532,7 +431,11 @@ async fn no_dispatch_without_reservation() {
         status: ActionRequestStatus::Pending,
         created_at_unix_seconds: now,
     };
-    ports.request_store.insert(request).await.unwrap();
+    ports
+        .request_store
+        .insert(&tenant(), request)
+        .await
+        .unwrap();
 
     // No mandate projection exists.
     let result = uc
@@ -595,7 +498,7 @@ async fn audit_log_records_reserve_and_consume() {
     .unwrap();
 
     // Verify audit log has both events.
-    let events = ports.audit_log.recent(10).await.unwrap();
+    let events = ports.audit_log.recent(&tenant(), 10).await.unwrap();
     assert!(events.len() >= 2);
     assert_eq!(events[events.len() - 2].action, "reserve_mandate");
     assert_eq!(events[events.len() - 1].action, "consume_mandate");
@@ -632,11 +535,20 @@ async fn reserve_and_dispatch_full_flow_provider_accepts() {
     }
 
     // Verify mandate is consumed.
-    let mandate = ports.mandate_store.get("mandate-1").await.unwrap().unwrap();
+    let mandate = ports
+        .mandate_store
+        .get(&tenant(), "mandate-1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(mandate.state, "consumed");
 
     // Receipt production waits for authenticated provider evidence.
-    let receipts = ports.receipt_store.by_mandate("mandate-1").await.unwrap();
+    let receipts = ports
+        .receipt_store
+        .by_mandate(&tenant(), "mandate-1")
+        .await
+        .unwrap();
     assert!(receipts.is_empty());
 }
 
@@ -671,11 +583,20 @@ async fn reserve_and_dispatch_full_flow_provider_rejects() {
     }
 
     // Verify mandate is quarantined.
-    let mandate = ports.mandate_store.get("mandate-1").await.unwrap().unwrap();
+    let mandate = ports
+        .mandate_store
+        .get(&tenant(), "mandate-1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(mandate.state, "quarantined");
 
     // Ambiguity does not fabricate a receipt.
-    let receipts = ports.receipt_store.by_mandate("mandate-1").await.unwrap();
+    let receipts = ports
+        .receipt_store
+        .by_mandate(&tenant(), "mandate-1")
+        .await
+        .unwrap();
     assert!(receipts.is_empty());
 }
 
@@ -719,7 +640,11 @@ async fn reservation_failed_outcome_returns_immediately() {
     assert!(matches!(result, DispatchOutcome::ReplayRejected(_)));
 
     // Verify only one attempt was created.
-    let attempts = ports.attempt_store.by_mandate("mandate-1").await.unwrap();
+    let attempts = ports
+        .attempt_store
+        .by_mandate(&tenant(), "mandate-1")
+        .await
+        .unwrap();
     assert_eq!(attempts.len(), 1);
 }
 
@@ -782,7 +707,7 @@ async fn no_second_dispatch_after_consumption() {
 
     // The rejected second call is evidence, while the provider-facing attempt
     // journal still contains exactly one dispatch.
-    let events = ports.audit_log.recent(10).await.unwrap();
+    let events = ports.audit_log.recent(&tenant(), 10).await.unwrap();
     let replay = events
         .iter()
         .find(|event| event.detail.contains("MANDATE.REPLAY_DETECTED"))
@@ -792,7 +717,7 @@ async fn no_second_dispatch_after_consumption() {
     assert_eq!(
         ports
             .attempt_store
-            .by_mandate("mandate-1")
+            .by_mandate(&tenant(), "mandate-1")
             .await
             .unwrap()
             .len(),
@@ -838,7 +763,7 @@ async fn deployment_id_is_recorded_in_attempt_on_provider_acceptance() {
     // Verify the attempt has the deployment ID recorded.
     let attempt = ports
         .attempt_store
-        .get("att-mandate-1")
+        .get(&tenant(), "att-mandate-1")
         .await
         .unwrap()
         .unwrap();
@@ -876,7 +801,7 @@ async fn deployment_id_is_none_on_provider_rejection() {
     // Verify the attempt has no deployment ID.
     let attempt = ports
         .attempt_store
-        .get("att-mandate-1")
+        .get(&tenant(), "att-mandate-1")
         .await
         .unwrap()
         .unwrap();
@@ -965,7 +890,12 @@ async fn complete_dispatch_records_deployment_id_separately() {
     .unwrap();
 
     // Verify the attempt has the deployment ID.
-    let attempt = ports.attempt_store.get(&attempt_id).await.unwrap().unwrap();
+    let attempt = ports
+        .attempt_store
+        .get(&tenant(), &attempt_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(attempt.github_deployment_id, Some(123));
     assert_eq!(attempt.state, ExecutionAttemptState::Accepted);
 }
@@ -1011,10 +941,20 @@ async fn accepted_dispatch_without_deployment_id_fails_closed() {
         error,
         crate::dispatch::DispatchError::InvalidProviderResponse(_)
     ));
-    let attempt = ports.attempt_store.get(&attempt_id).await.unwrap().unwrap();
+    let attempt = ports
+        .attempt_store
+        .get(&tenant(), &attempt_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(attempt.state, ExecutionAttemptState::OutcomeAmbiguous);
     assert_eq!(attempt.github_deployment_id, None);
-    let mandate = ports.mandate_store.get("mandate-1").await.unwrap().unwrap();
+    let mandate = ports
+        .mandate_store
+        .get(&tenant(), "mandate-1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(mandate.state, "quarantined");
 }
 

@@ -9,6 +9,7 @@
 //!    nodes, and gaps into a portable case file.
 //! 3. **Bundle export storage** — records bundle exports for audit trail.
 
+use piteka_storage::TenantScope;
 use piteka_storage::digest::ContentDigest;
 use piteka_storage::model::{
     EvidenceNodeRecord, EvidenceSource, ProtocolObjectRecord, ReceiptProjection,
@@ -115,6 +116,7 @@ pub struct BundleExport {
 ///
 /// Returns a [`BundleExport`] with the bundle identifier and digest.
 pub async fn assemble_bundle<R, E, Eb, P, SC>(
+    tenant: &TenantScope,
     receipt_store: &R,
     evidence_store: &E,
     evidence_blob_store: &Eb,
@@ -131,14 +133,15 @@ where
 {
     // 1. Fetch the receipt.
     let receipt = receipt_store
-        .get(receipt_id_hex)
+        .get(tenant, receipt_id_hex)
         .await?
         .ok_or_else(|| BundleExportError::ReceiptNotFound(receipt_id_hex.to_string()))?;
 
     // 2. Fetch all evidence nodes.
-    let dispatch_nodes = fetch_nodes(evidence_store, &receipt.dispatch_evidence_refs).await?;
-    let target_nodes = fetch_nodes(evidence_store, &receipt.target_evidence_refs).await?;
-    let gap_nodes = fetch_nodes(evidence_store, &receipt.evidence_gaps).await?;
+    let dispatch_nodes =
+        fetch_nodes(tenant, evidence_store, &receipt.dispatch_evidence_refs).await?;
+    let target_nodes = fetch_nodes(tenant, evidence_store, &receipt.target_evidence_refs).await?;
+    let gap_nodes = fetch_nodes(tenant, evidence_store, &receipt.evidence_gaps).await?;
 
     // 3. Store evidence blobs in the content-addressed store.
     let mut all_evidence_ids = Vec::new();
@@ -149,7 +152,8 @@ where
         .chain(target_nodes.iter())
         .chain(gap_nodes.iter())
     {
-        let (blob_digest, size_bytes) = store_evidence_blob(evidence_blob_store, node).await?;
+        let (blob_digest, size_bytes) =
+            store_evidence_blob(tenant, evidence_blob_store, node).await?;
         all_evidence_ids.push(format!("{}:{}", node.node_id_hex, blob_digest.to_hex()));
         evidence_descriptors.push(piteka_storage::model::EvidenceDescriptor {
             digest: blob_digest,
@@ -159,7 +163,9 @@ where
     }
 
     // 4. Assemble the bundle manifest as JSON, including any independent single-use anchor.
-    let anchor = seal_consumption_store.get(&receipt.mandate_id_hex).await?;
+    let anchor = seal_consumption_store
+        .get(tenant, &receipt.mandate_id_hex)
+        .await?;
     let bundle_manifest = assemble_manifest(
         &receipt,
         &dispatch_nodes,
@@ -178,16 +184,21 @@ where
 
     // Store in protocol objects as the canonical bundle.
     protocol_store
-        .put(ProtocolObjectRecord {
-            kind: "dispute_bundle".to_string(),
-            object_id_hex: bundle_id_hex.clone(),
-            bytes: bundle_bytes.clone(),
-        })
+        .put(
+            tenant,
+            ProtocolObjectRecord {
+                kind: "dispute_bundle".to_string(),
+                object_id_hex: bundle_id_hex.clone(),
+                bytes: bundle_bytes.clone(),
+            },
+        )
         .await?;
 
     // 6. Store evidence descriptors.
     for descriptor in evidence_descriptors {
-        evidence_blob_store.put_descriptor(descriptor).await?;
+        evidence_blob_store
+            .put_descriptor(tenant, descriptor)
+            .await?;
     }
 
     Ok(BundleExport {
@@ -208,6 +219,7 @@ where
 /// `ExportManifest` (`bundle_version` `"0.1"`). Keeping this side-effect free
 /// lets the feed producer publish observations from already-captured evidence.
 pub async fn export_manifest_bytes<R, E, SC>(
+    tenant: &TenantScope,
     receipt_store: &R,
     evidence_store: &E,
     seal_consumption_store: &SC,
@@ -219,14 +231,17 @@ where
     SC: SealConsumptionStore,
 {
     let receipt = receipt_store
-        .get(receipt_id_hex)
+        .get(tenant, receipt_id_hex)
         .await?
         .ok_or_else(|| BundleExportError::ReceiptNotFound(receipt_id_hex.to_string()))?;
 
-    let dispatch_nodes = fetch_nodes(evidence_store, &receipt.dispatch_evidence_refs).await?;
-    let target_nodes = fetch_nodes(evidence_store, &receipt.target_evidence_refs).await?;
-    let gap_nodes = fetch_nodes(evidence_store, &receipt.evidence_gaps).await?;
-    let anchor = seal_consumption_store.get(&receipt.mandate_id_hex).await?;
+    let dispatch_nodes =
+        fetch_nodes(tenant, evidence_store, &receipt.dispatch_evidence_refs).await?;
+    let target_nodes = fetch_nodes(tenant, evidence_store, &receipt.target_evidence_refs).await?;
+    let gap_nodes = fetch_nodes(tenant, evidence_store, &receipt.evidence_gaps).await?;
+    let anchor = seal_consumption_store
+        .get(tenant, &receipt.mandate_id_hex)
+        .await?;
 
     let manifest = assemble_manifest(
         &receipt,
@@ -241,13 +256,14 @@ where
 
 /// Fetches evidence nodes by their IDs.
 async fn fetch_nodes<E: EvidenceNodeStore>(
+    tenant: &TenantScope,
     store: &E,
     node_ids: &[String],
 ) -> Result<Vec<EvidenceNodeRecord>, BundleExportError> {
     let mut nodes = Vec::with_capacity(node_ids.len());
     let mut missing = Vec::new();
     for id in node_ids {
-        let node = store.get(id).await?;
+        let node = store.get(tenant, id).await?;
         if let Some(node) = node {
             nodes.push(node);
         } else {
@@ -266,6 +282,7 @@ async fn fetch_nodes<E: EvidenceNodeStore>(
 
 /// Stores an evidence node's payload in the content-addressed blob store.
 async fn store_evidence_blob<Eb: EvidenceObjectStore>(
+    tenant: &TenantScope,
     store: &Eb,
     node: &EvidenceNodeRecord,
 ) -> Result<(ContentDigest, u64), BundleExportError> {
@@ -293,7 +310,7 @@ async fn store_evidence_blob<Eb: EvidenceObjectStore>(
 
     let size_bytes = payload_bytes.len() as u64;
     let digest = store
-        .put(&payload_bytes)
+        .put(tenant, &payload_bytes)
         .await
         .map_err(BundleExportError::Storage)?;
     Ok((digest, size_bytes))

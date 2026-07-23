@@ -36,7 +36,7 @@ pub use model::{
     CaseAppendOutcome, CaseEvent, EvidenceDescriptor, EvidenceNodeRecord, EvidenceSource,
     ExecutionAttempt, ExecutionAttemptState, InvestigatorCase, MandateProjection,
     ProtocolObjectRecord, ReceiptOutcome, ReceiptProjection, SealConsumptionProofRecord,
-    WebhookReceipt, WebhookRecordOutcome,
+    TenantScope, WebhookReceipt, WebhookRecordOutcome,
 };
 pub use ports::{
     ActionRequestStore, ApprovalDecisionStore, AuditLog, EvidenceNodeStore, EvidenceObjectStore,

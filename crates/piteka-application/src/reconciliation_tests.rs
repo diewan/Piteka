@@ -28,6 +28,10 @@ use piteka_storage::ports::{
 };
 use piteka_storage::{AuditEvent, CasOutcome, StorageError, StorageResult};
 
+fn tenant() -> piteka_storage::TenantScope {
+    piteka_storage::TenantScope::new("test-tenant").unwrap()
+}
+
 /// Deterministic test clock.
 #[derive(Clone)]
 struct StepClock {
@@ -120,95 +124,6 @@ impl TestPorts {
     }
 }
 
-#[async_trait::async_trait]
-impl MandateProjectionStore for TestPorts {
-    async fn insert(&self, mandate_id_hex: &str, state: &str) -> StorageResult<()> {
-        self.mandate_store.insert(mandate_id_hex, state).await
-    }
-    async fn get(
-        &self,
-        mandate_id_hex: &str,
-    ) -> StorageResult<Option<piteka_storage::MandateProjection>> {
-        self.mandate_store.get(mandate_id_hex).await
-    }
-    async fn compare_and_swap(
-        &self,
-        mandate_id_hex: &str,
-        expected_version: i64,
-        new_state: &str,
-    ) -> StorageResult<CasOutcome> {
-        self.mandate_store
-            .compare_and_swap(mandate_id_hex, expected_version, new_state)
-            .await
-    }
-}
-
-#[async_trait::async_trait]
-impl ExecutionAttemptStore for TestPorts {
-    async fn insert(&self, attempt: ExecutionAttempt) -> StorageResult<()> {
-        self.attempt_store.insert(attempt).await
-    }
-    async fn get(&self, attempt_id_hex: &str) -> StorageResult<Option<ExecutionAttempt>> {
-        self.attempt_store.get(attempt_id_hex).await
-    }
-    async fn update_state(
-        &self,
-        attempt_id_hex: &str,
-        new_state: ExecutionAttemptState,
-    ) -> StorageResult<()> {
-        self.attempt_store
-            .update_state(attempt_id_hex, new_state)
-            .await
-    }
-    async fn update_deployment_id(
-        &self,
-        attempt_id_hex: &str,
-        deployment_id: u64,
-    ) -> StorageResult<()> {
-        self.attempt_store
-            .update_deployment_id(attempt_id_hex, deployment_id)
-            .await
-    }
-    async fn by_mandate(&self, mandate_id_hex: &str) -> StorageResult<Vec<ExecutionAttempt>> {
-        self.attempt_store.by_mandate(mandate_id_hex).await
-    }
-    async fn by_deployment_id(
-        &self,
-        deployment_id: u64,
-    ) -> StorageResult<Option<ExecutionAttempt>> {
-        self.attempt_store.by_deployment_id(deployment_id).await
-    }
-}
-
-#[async_trait::async_trait]
-impl ReceiptProjectionStore for TestPorts {
-    async fn insert(&self, receipt: piteka_storage::ReceiptProjection) -> StorageResult<()> {
-        self.receipt_store.insert(receipt).await
-    }
-    async fn get(
-        &self,
-        receipt_id_hex: &str,
-    ) -> StorageResult<Option<piteka_storage::ReceiptProjection>> {
-        self.receipt_store.get(receipt_id_hex).await
-    }
-    async fn by_mandate(
-        &self,
-        mandate_id_hex: &str,
-    ) -> StorageResult<Vec<piteka_storage::ReceiptProjection>> {
-        self.receipt_store.by_mandate(mandate_id_hex).await
-    }
-}
-
-#[async_trait::async_trait]
-impl AuditLog for TestPorts {
-    async fn append(&self, event: AuditEvent) -> StorageResult<()> {
-        self.audit_log.append(event).await
-    }
-    async fn recent(&self, limit: usize) -> StorageResult<Vec<AuditEvent>> {
-        self.audit_log.recent(limit).await
-    }
-}
-
 impl ReconciliationPorts for TestPorts {
     fn mandate_store(&self) -> &dyn MandateProjectionStore {
         &self.mandate_store
@@ -231,7 +146,7 @@ impl ReconciliationPorts for TestPorts {
 }
 
 fn use_case(ports: &TestPorts) -> ReconciliationUseCase<TestPorts> {
-    ReconciliationUseCase::new(ports.clone())
+    ReconciliationUseCase::new(tenant(), ports.clone())
 }
 
 /// Helper: set up a quarantined mandate with an ambiguous attempt.
@@ -244,25 +159,28 @@ async fn setup_quarantined_mandate(
     // Insert mandate in quarantined state at version 1.
     ports
         .mandate_store
-        .insert(mandate_id_hex, "quarantined")
+        .insert(&tenant(), mandate_id_hex, "quarantined")
         .await
         .unwrap();
 
     // Insert execution attempt in OutcomeAmbiguous state.
     ports
         .attempt_store
-        .insert(ExecutionAttempt {
-            attempt_id_hex: attempt_id_hex.to_string(),
-            mandate_id_hex: mandate_id_hex.to_string(),
-            intent_id_hex: "intent-abc123".to_string(),
-            reservation_token_digest: "token-digest".to_string(),
-            executor_identity: "worker-1".to_string(),
-            correlation_key: "corr-1".to_string(),
-            started_at_unix_seconds: 1_000,
-            dispatch_boundary_at_unix_seconds: Some(1_001),
-            state: ExecutionAttemptState::OutcomeAmbiguous,
-            github_deployment_id: Some(deployment_id),
-        })
+        .insert(
+            &tenant(),
+            ExecutionAttempt {
+                attempt_id_hex: attempt_id_hex.to_string(),
+                mandate_id_hex: mandate_id_hex.to_string(),
+                intent_id_hex: "intent-abc123".to_string(),
+                reservation_token_digest: "token-digest".to_string(),
+                executor_identity: "worker-1".to_string(),
+                correlation_key: "corr-1".to_string(),
+                started_at_unix_seconds: 1_000,
+                dispatch_boundary_at_unix_seconds: Some(1_001),
+                state: ExecutionAttemptState::OutcomeAmbiguous,
+                github_deployment_id: Some(deployment_id),
+            },
+        )
         .await
         .unwrap();
 }
@@ -294,16 +212,30 @@ async fn reconcile_accepts_when_provider_confirms_deployment() {
     }
 
     // Verify mandate is consumed.
-    let mandate = ports.mandate_store.get("mandate-1").await.unwrap().unwrap();
+    let mandate = ports
+        .mandate_store
+        .get(&tenant(), "mandate-1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(mandate.state, "consumed");
 
     // Verify attempt is ReconciledAccepted.
-    let attempt = ports.attempt_store.get("att-1").await.unwrap().unwrap();
+    let attempt = ports
+        .attempt_store
+        .get(&tenant(), "att-1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(attempt.state, ExecutionAttemptState::ReconciledAccepted);
 
     // Correlation establishes provider acceptance, not target success. Receipt
     // production waits for source-attributed outcome evidence.
-    let receipts = ports.receipt_store.by_mandate("mandate-1").await.unwrap();
+    let receipts = ports
+        .receipt_store
+        .by_mandate(&tenant(), "mandate-1")
+        .await
+        .unwrap();
     assert!(receipts.is_empty());
 }
 
@@ -323,15 +255,29 @@ async fn absent_deployment_does_not_abandon_or_release() {
     assert!(matches!(result, ReconciliationOutcome::Unresolved { .. }));
 
     // Absence is not non-occurrence: both live states remain quarantined.
-    let mandate = ports.mandate_store.get("mandate-2").await.unwrap().unwrap();
+    let mandate = ports
+        .mandate_store
+        .get(&tenant(), "mandate-2")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(mandate.state, "quarantined");
 
     // Verify attempt is AbandonedAmbiguous.
-    let attempt = ports.attempt_store.get("att-2").await.unwrap().unwrap();
+    let attempt = ports
+        .attempt_store
+        .get(&tenant(), "att-2")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(attempt.state, ExecutionAttemptState::OutcomeAmbiguous);
 
     // Verify receipt with Unknown outcome was created.
-    let receipts = ports.receipt_store.by_mandate("mandate-2").await.unwrap();
+    let receipts = ports
+        .receipt_store
+        .by_mandate(&tenant(), "mandate-2")
+        .await
+        .unwrap();
     assert!(receipts.is_empty());
 }
 
@@ -360,15 +306,29 @@ async fn reconcile_defers_when_provider_unavailable() {
     }
 
     // Verify mandate is STILL quarantined (not consumed or abandoned).
-    let mandate = ports.mandate_store.get("mandate-3").await.unwrap().unwrap();
+    let mandate = ports
+        .mandate_store
+        .get(&tenant(), "mandate-3")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(mandate.state, "quarantined");
 
     // Verify attempt is STILL OutcomeAmbiguous.
-    let attempt = ports.attempt_store.get("att-3").await.unwrap().unwrap();
+    let attempt = ports
+        .attempt_store
+        .get(&tenant(), "att-3")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(attempt.state, ExecutionAttemptState::OutcomeAmbiguous);
 
     // Verify no new receipt was created.
-    let receipts = ports.receipt_store.by_mandate("mandate-3").await.unwrap();
+    let receipts = ports
+        .receipt_store
+        .by_mandate(&tenant(), "mandate-3")
+        .await
+        .unwrap();
     assert_eq!(receipts.len(), 0);
 }
 
@@ -381,7 +341,7 @@ async fn reconcile_rejects_non_quarantined_mandate() {
     // Insert mandate in consumed state.
     ports
         .mandate_store
-        .insert("mandate-4", "consumed")
+        .insert(&tenant(), "mandate-4", "consumed")
         .await
         .unwrap();
 
@@ -405,7 +365,7 @@ async fn reconcile_rejects_mandate_not_in_quarantined_state() {
     // Insert mandate in reserved state.
     ports
         .mandate_store
-        .insert("mandate-5", "reserved")
+        .insert(&tenant(), "mandate-5", "reserved")
         .await
         .unwrap();
 
@@ -475,24 +435,27 @@ async fn no_deployment_id_remains_unresolved() {
     // Set up a quarantined mandate WITHOUT a deployment ID.
     ports
         .mandate_store
-        .insert("mandate-7", "quarantined")
+        .insert(&tenant(), "mandate-7", "quarantined")
         .await
         .unwrap();
 
     ports
         .attempt_store
-        .insert(ExecutionAttempt {
-            attempt_id_hex: "att-7".to_string(),
-            mandate_id_hex: "mandate-7".to_string(),
-            intent_id_hex: "intent-xyz".to_string(),
-            reservation_token_digest: "token".to_string(),
-            executor_identity: "worker-1".to_string(),
-            correlation_key: "corr-7".to_string(),
-            started_at_unix_seconds: 1_000,
-            dispatch_boundary_at_unix_seconds: Some(1_001),
-            state: ExecutionAttemptState::OutcomeAmbiguous,
-            github_deployment_id: None, // No deployment was created
-        })
+        .insert(
+            &tenant(),
+            ExecutionAttempt {
+                attempt_id_hex: "att-7".to_string(),
+                mandate_id_hex: "mandate-7".to_string(),
+                intent_id_hex: "intent-xyz".to_string(),
+                reservation_token_digest: "token".to_string(),
+                executor_identity: "worker-1".to_string(),
+                correlation_key: "corr-7".to_string(),
+                started_at_unix_seconds: 1_000,
+                dispatch_boundary_at_unix_seconds: Some(1_001),
+                state: ExecutionAttemptState::OutcomeAmbiguous,
+                github_deployment_id: None, // No deployment was created
+            },
+        )
         .await
         .unwrap();
 
@@ -505,11 +468,21 @@ async fn no_deployment_id_remains_unresolved() {
     }
 
     // Verify mandate is abandoned.
-    let mandate = ports.mandate_store.get("mandate-7").await.unwrap().unwrap();
+    let mandate = ports
+        .mandate_store
+        .get(&tenant(), "mandate-7")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(mandate.state, "quarantined");
 
     // Verify attempt is AbandonedAmbiguous.
-    let attempt = ports.attempt_store.get("att-7").await.unwrap().unwrap();
+    let attempt = ports
+        .attempt_store
+        .get(&tenant(), "att-7")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(attempt.state, ExecutionAttemptState::OutcomeAmbiguous);
 }
 
@@ -520,24 +493,27 @@ async fn timeout_after_request_recovers_deployment_by_correlation_payload() {
 
     ports
         .mandate_store
-        .insert("mandate-timeout", "quarantined")
+        .insert(&tenant(), "mandate-timeout", "quarantined")
         .await
         .unwrap();
     ports
         .attempt_store
-        .insert(ExecutionAttempt {
-            attempt_id_hex: "att-timeout".to_string(),
-            mandate_id_hex: "mandate-timeout".to_string(),
-            intent_id_hex: "intent-timeout".to_string(),
-            reservation_token_digest: "token-digest".to_string(),
-            executor_identity: "worker-1".to_string(),
-            correlation_key: "corr-timeout".to_string(),
-            started_at_unix_seconds: 1_000,
-            dispatch_boundary_at_unix_seconds: Some(1_001),
-            state: ExecutionAttemptState::OutcomeAmbiguous,
-            // The response containing GitHub's ID was lost after request send.
-            github_deployment_id: None,
-        })
+        .insert(
+            &tenant(),
+            ExecutionAttempt {
+                attempt_id_hex: "att-timeout".to_string(),
+                mandate_id_hex: "mandate-timeout".to_string(),
+                intent_id_hex: "intent-timeout".to_string(),
+                reservation_token_digest: "token-digest".to_string(),
+                executor_identity: "worker-1".to_string(),
+                correlation_key: "corr-timeout".to_string(),
+                started_at_unix_seconds: 1_000,
+                dispatch_boundary_at_unix_seconds: Some(1_001),
+                state: ExecutionAttemptState::OutcomeAmbiguous,
+                // The response containing GitHub's ID was lost after request send.
+                github_deployment_id: None,
+            },
+        )
         .await
         .unwrap();
     ports.provider().set_accepted(true);
@@ -550,14 +526,14 @@ async fn timeout_after_request_recovers_deployment_by_correlation_payload() {
 
     let mandate = ports
         .mandate_store
-        .get("mandate-timeout")
+        .get(&tenant(), "mandate-timeout")
         .await
         .unwrap()
         .unwrap();
     assert_eq!(mandate.state, "consumed");
     let attempt = ports
         .attempt_store
-        .get("att-timeout")
+        .get(&tenant(), "att-timeout")
         .await
         .unwrap()
         .unwrap();
@@ -580,7 +556,7 @@ async fn reconciliation_rejects_empty_operator_identity() {
     assert_eq!(
         ports
             .mandate_store
-            .get("mandate-auth")
+            .get(&tenant(), "mandate-auth")
             .await
             .unwrap()
             .unwrap()
@@ -602,7 +578,7 @@ async fn audit_log_records_reconciliation_outcomes() {
     uc.reconcile("mandate-8", "operator-1", 1).await.unwrap();
 
     // Verify audit log has the reconciliation event.
-    let events = ports.audit_log.recent(10).await.unwrap();
+    let events = ports.audit_log.recent(&tenant(), 10).await.unwrap();
     assert!(events.iter().any(|e| e.action == "reconciliation.accepted"));
     assert!(events.iter().any(|e| e.detail.contains("mandate-8")));
 }
@@ -622,7 +598,7 @@ async fn audit_log_records_abandoned_outcome() {
         .unwrap();
 
     // Verify audit log has the abandonment event.
-    let events = ports.audit_log.recent(10).await.unwrap();
+    let events = ports.audit_log.recent(&tenant(), 10).await.unwrap();
     assert!(
         events
             .iter()
@@ -649,13 +625,18 @@ async fn no_automatic_release_reconciliation_is_explicit_only() {
     // Do NOT call reconcile. The mandate should remain quarantined.
     let mandate = ports
         .mandate_store
-        .get("mandate-10")
+        .get(&tenant(), "mandate-10")
         .await
         .unwrap()
         .unwrap();
     assert_eq!(mandate.state, "quarantined");
 
-    let attempt = ports.attempt_store.get("att-10").await.unwrap().unwrap();
+    let attempt = ports
+        .attempt_store
+        .get(&tenant(), "att-10")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(attempt.state, ExecutionAttemptState::OutcomeAmbiguous);
 }
 
@@ -679,7 +660,7 @@ async fn github_v1_has_no_quarantined_released_path() {
 
     let mandate = ports
         .mandate_store
-        .get("mandate-11")
+        .get(&tenant(), "mandate-11")
         .await
         .unwrap()
         .unwrap();
@@ -698,7 +679,7 @@ async fn github_v1_has_no_quarantined_released_path() {
 
     let mandate = ports
         .mandate_store
-        .get("mandate-12")
+        .get(&tenant(), "mandate-12")
         .await
         .unwrap()
         .unwrap();

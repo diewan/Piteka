@@ -21,7 +21,7 @@
 use piteka_domain::UserId;
 use piteka_storage::{
     ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, AuditLog, CasOutcome,
-    StorageError, StorageResult,
+    StorageError, StorageResult, TenantScope,
 };
 
 use crate::Clock;
@@ -134,20 +134,20 @@ pub trait ActionRequestPorts: Send + Sync {
 /// Use-case orchestrator for action-request and approval workflows.
 #[derive(Clone)]
 pub struct ActionRequestUseCase<P> {
+    tenant: TenantScope,
     ports: P,
 }
 
 impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
     /// Creates a new use-case orchestrator.
     #[must_use]
-    pub const fn new(ports: P) -> Self {
-        Self { ports }
+    pub const fn new(tenant: TenantScope, ports: P) -> Self {
+        Self { tenant, ports }
     }
 
-    /// Borrows the audit log, for inspection of recorded decisions.
-    #[must_use]
-    pub fn audit_log(&self) -> &dyn AuditLog {
-        self.ports.audit_log()
+    /// Reads recent audit events inside this use case's authenticated tenant.
+    pub async fn recent_audit(&self, limit: usize) -> StorageResult<Vec<AuditEvent>> {
+        self.ports.audit_log().recent(&self.tenant, limit).await
     }
 
     /// Proposes a new action request.
@@ -177,20 +177,26 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
             created_at_unix_seconds: now,
         };
 
-        self.ports.request_store().insert(request.clone()).await?;
+        self.ports
+            .request_store()
+            .insert(&self.tenant, request.clone())
+            .await?;
 
         self.ports
             .audit_log()
-            .append(AuditEvent {
-                occurred_at_unix_seconds: now,
-                actor: Some(requested_by.as_str().to_string()),
-                action: "propose_action".to_string(),
-                decision: "granted".to_string(),
-                detail: format!(
-                    "action request {} proposed, intent={:?}",
-                    request.request_id, intent_id_hex
-                ),
-            })
+            .append(
+                &self.tenant,
+                AuditEvent {
+                    occurred_at_unix_seconds: now,
+                    actor: Some(requested_by.as_str().to_string()),
+                    action: "propose_action".to_string(),
+                    decision: "granted".to_string(),
+                    detail: format!(
+                        "action request {} proposed, intent={:?}",
+                        request.request_id, intent_id_hex
+                    ),
+                },
+            )
             .await?;
 
         Ok(Proposed { request })
@@ -223,7 +229,7 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
         let request = self
             .ports
             .request_store()
-            .get(request_id)
+            .get(&self.tenant, request_id)
             .await?
             .ok_or_else(|| ActionRequestUseCaseError::NotFound(request_id.to_string()))?;
 
@@ -238,7 +244,12 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
         let outcome = self
             .ports
             .request_store()
-            .compare_and_swap(request_id, expected_version, ActionRequestStatus::Approved)
+            .compare_and_swap(
+                &self.tenant,
+                request_id,
+                expected_version,
+                ActionRequestStatus::Approved,
+            )
             .await?;
 
         match outcome {
@@ -253,30 +264,36 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
                     decided_at_unix_seconds: now,
                 };
 
-                self.ports.decision_store().insert(decision.clone()).await?;
+                self.ports
+                    .decision_store()
+                    .insert(&self.tenant, decision.clone())
+                    .await?;
 
                 self.ports
                     .audit_log()
-                    .append(AuditEvent {
-                        occurred_at_unix_seconds: now,
-                        actor: Some(approver_id.as_str().to_string()),
-                        action: "approve_action".to_string(),
-                        decision: "granted".to_string(),
-                        detail: format!(
-                            "action request {} approved by {}, intent={:?}, version={}",
-                            request_id,
-                            approver_id.as_str(),
-                            intent_id_hex,
-                            new_version
-                        ),
-                    })
+                    .append(
+                        &self.tenant,
+                        AuditEvent {
+                            occurred_at_unix_seconds: now,
+                            actor: Some(approver_id.as_str().to_string()),
+                            action: "approve_action".to_string(),
+                            decision: "granted".to_string(),
+                            detail: format!(
+                                "action request {} approved by {}, intent={:?}, version={}",
+                                request_id,
+                                approver_id.as_str(),
+                                intent_id_hex,
+                                new_version
+                            ),
+                        },
+                    )
                     .await?;
 
                 // Refresh the request to reflect the new status.
                 let updated_request = self
                     .ports
                     .request_store()
-                    .get(request_id)
+                    .get(&self.tenant, request_id)
                     .await?
                     .expect("CAS applied but request vanished");
 
@@ -314,7 +331,7 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
         let request = self
             .ports
             .request_store()
-            .get(request_id)
+            .get(&self.tenant, request_id)
             .await?
             .ok_or_else(|| ActionRequestUseCaseError::NotFound(request_id.to_string()))?;
 
@@ -328,7 +345,12 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
         let outcome = self
             .ports
             .request_store()
-            .compare_and_swap(request_id, expected_version, ActionRequestStatus::Rejected)
+            .compare_and_swap(
+                &self.tenant,
+                request_id,
+                expected_version,
+                ActionRequestStatus::Rejected,
+            )
             .await?;
 
         match outcome {
@@ -343,27 +365,33 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
                     decided_at_unix_seconds: now,
                 };
 
-                self.ports.decision_store().insert(decision.clone()).await?;
+                self.ports
+                    .decision_store()
+                    .insert(&self.tenant, decision.clone())
+                    .await?;
 
                 self.ports
                     .audit_log()
-                    .append(AuditEvent {
-                        occurred_at_unix_seconds: now,
-                        actor: Some(approver_id.as_str().to_string()),
-                        action: "reject_action".to_string(),
-                        decision: "denied".to_string(),
-                        detail: format!(
-                            "action request {} rejected by {}",
-                            request_id,
-                            approver_id.as_str()
-                        ),
-                    })
+                    .append(
+                        &self.tenant,
+                        AuditEvent {
+                            occurred_at_unix_seconds: now,
+                            actor: Some(approver_id.as_str().to_string()),
+                            action: "reject_action".to_string(),
+                            decision: "denied".to_string(),
+                            detail: format!(
+                                "action request {} rejected by {}",
+                                request_id,
+                                approver_id.as_str()
+                            ),
+                        },
+                    )
                     .await?;
 
                 let updated_request = self
                     .ports
                     .request_store()
-                    .get(request_id)
+                    .get(&self.tenant, request_id)
                     .await?
                     .expect("CAS applied but request vanished");
 
@@ -400,7 +428,7 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
         let request = self
             .ports
             .request_store()
-            .get(request_id)
+            .get(&self.tenant, request_id)
             .await?
             .ok_or_else(|| ActionRequestUseCaseError::NotFound(request_id.to_string()))?;
 
@@ -414,30 +442,38 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
         let outcome = self
             .ports
             .request_store()
-            .compare_and_swap(request_id, expected_version, ActionRequestStatus::Revoked)
+            .compare_and_swap(
+                &self.tenant,
+                request_id,
+                expected_version,
+                ActionRequestStatus::Revoked,
+            )
             .await?;
 
         match outcome {
             CasOutcome::Applied { .. } => {
                 self.ports
                     .audit_log()
-                    .append(AuditEvent {
-                        occurred_at_unix_seconds: now,
-                        actor: Some(approver_id.as_str().to_string()),
-                        action: "revoke_mandate".to_string(),
-                        decision: "granted".to_string(),
-                        detail: format!(
-                            "action request {} revoked by {}",
-                            request_id,
-                            approver_id.as_str()
-                        ),
-                    })
+                    .append(
+                        &self.tenant,
+                        AuditEvent {
+                            occurred_at_unix_seconds: now,
+                            actor: Some(approver_id.as_str().to_string()),
+                            action: "revoke_mandate".to_string(),
+                            decision: "granted".to_string(),
+                            detail: format!(
+                                "action request {} revoked by {}",
+                                request_id,
+                                approver_id.as_str()
+                            ),
+                        },
+                    )
                     .await?;
 
                 let updated_request = self
                     .ports
                     .request_store()
-                    .get(request_id)
+                    .get(&self.tenant, request_id)
                     .await?
                     .expect("CAS applied but request vanished");
 
@@ -459,7 +495,10 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
     ///
     /// Returns a [`StorageError`] on backend failure.
     pub async fn get_request(&self, request_id: &str) -> StorageResult<Option<ActionRequest>> {
-        self.ports.request_store().get(request_id).await
+        self.ports
+            .request_store()
+            .get(&self.tenant, request_id)
+            .await
     }
 
     /// Lists all action requests.
@@ -468,7 +507,7 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
     ///
     /// Returns a [`StorageError`] on backend failure.
     pub async fn list_requests(&self) -> StorageResult<Vec<ActionRequest>> {
-        self.ports.request_store().list().await
+        self.ports.request_store().list(&self.tenant).await
     }
 
     /// Returns all approval decisions for a given request.
@@ -477,6 +516,9 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
     ///
     /// Returns a [`StorageError`] on backend failure.
     pub async fn get_decisions(&self, request_id: &str) -> StorageResult<Vec<ApprovalDecision>> {
-        self.ports.decision_store().by_request(request_id).await
+        self.ports
+            .decision_store()
+            .by_request(&self.tenant, request_id)
+            .await
     }
 }

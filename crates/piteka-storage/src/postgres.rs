@@ -14,7 +14,7 @@ use crate::model::{
     ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome,
     CaseAppendOutcome, CaseEvent, EvidenceNodeRecord, EvidenceSource, ExecutionAttempt,
     ExecutionAttemptState, InvestigatorCase, MandateProjection, ProtocolObjectRecord,
-    ReceiptOutcome, ReceiptProjection, SealConsumptionProofRecord, WebhookReceipt,
+    ReceiptOutcome, ReceiptProjection, SealConsumptionProofRecord, TenantScope, WebhookReceipt,
     WebhookRecordOutcome,
 };
 use crate::ports::{
@@ -43,8 +43,8 @@ impl PgInvestigatorCaseStore {
 
 #[async_trait]
 impl InvestigatorCaseStore for PgInvestigatorCaseStore {
-    async fn create(&self, case: InvestigatorCase) -> StorageResult<()> {
-        if case.tenant_id.trim().is_empty()
+    async fn create(&self, tenant: &TenantScope, case: InvestigatorCase) -> StorageResult<()> {
+        if case.tenant_id != tenant.as_str()
             || case.case_id.trim().is_empty()
             || case.title.trim().is_empty()
         {
@@ -62,12 +62,16 @@ impl InvestigatorCaseStore for PgInvestigatorCaseStore {
         Ok(())
     }
 
-    async fn get(&self, tenant_id: &str, case_id: &str) -> StorageResult<Option<InvestigatorCase>> {
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        case_id: &str,
+    ) -> StorageResult<Option<InvestigatorCase>> {
         let row = sqlx::query("SELECT version, title, opened_by, created_at FROM investigator_cases WHERE tenant_id = $1 AND case_id = $2")
-            .bind(tenant_id).bind(case_id).fetch_optional(&self.pool).await.map_err(backend)?;
+            .bind(tenant.as_str()).bind(case_id).fetch_optional(&self.pool).await.map_err(backend)?;
         row.map(|row| {
             Ok(InvestigatorCase {
-                tenant_id: tenant_id.into(),
+                tenant_id: tenant.as_str().into(),
                 case_id: case_id.into(),
                 version: row.try_get("version").map_err(backend)?,
                 title: row.try_get("title").map_err(backend)?,
@@ -78,13 +82,13 @@ impl InvestigatorCaseStore for PgInvestigatorCaseStore {
         .transpose()
     }
 
-    async fn list(&self, tenant_id: &str) -> StorageResult<Vec<InvestigatorCase>> {
+    async fn list(&self, tenant: &TenantScope) -> StorageResult<Vec<InvestigatorCase>> {
         let rows = sqlx::query("SELECT case_id, version, title, opened_by, created_at FROM investigator_cases WHERE tenant_id = $1 ORDER BY case_id")
-            .bind(tenant_id).fetch_all(&self.pool).await.map_err(backend)?;
+            .bind(tenant.as_str()).fetch_all(&self.pool).await.map_err(backend)?;
         rows.into_iter()
             .map(|row| {
                 Ok(InvestigatorCase {
-                    tenant_id: tenant_id.into(),
+                    tenant_id: tenant.as_str().into(),
                     case_id: row.try_get("case_id").map_err(backend)?,
                     version: row.try_get("version").map_err(backend)?,
                     title: row.try_get("title").map_err(backend)?,
@@ -97,17 +101,17 @@ impl InvestigatorCaseStore for PgInvestigatorCaseStore {
 
     async fn append(
         &self,
-        tenant_id: &str,
+        tenant: &TenantScope,
         case_id: &str,
         expected_version: i64,
         event: CaseEvent,
     ) -> StorageResult<CaseAppendOutcome> {
-        if event.tenant_id != tenant_id || event.case_id != case_id {
+        if event.tenant_id != tenant.as_str() || event.case_id != case_id {
             return Err(StorageError::Backend("case event scope mismatch".into()));
         }
         let mut tx = self.pool.begin().await.map_err(backend)?;
         let current = sqlx::query("SELECT version FROM investigator_cases WHERE tenant_id = $1 AND case_id = $2 FOR UPDATE")
-            .bind(tenant_id).bind(case_id).fetch_optional(&mut *tx).await.map_err(backend)?;
+            .bind(tenant.as_str()).bind(case_id).fetch_optional(&mut *tx).await.map_err(backend)?;
         let Some(current) = current else {
             return Ok(CaseAppendOutcome::Missing);
         };
@@ -117,13 +121,13 @@ impl InvestigatorCaseStore for PgInvestigatorCaseStore {
         }
         let new_version = current_version + 1;
         sqlx::query("INSERT INTO investigator_case_events (tenant_id, case_id, sequence, event_id, actor, kind, detail, evidence_digest_hex, occurred_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)")
-            .bind(tenant_id).bind(case_id).bind(new_version).bind(&event.event_id).bind(&event.actor)
+            .bind(tenant.as_str()).bind(case_id).bind(new_version).bind(&event.event_id).bind(&event.actor)
             .bind(&event.kind).bind(&event.detail).bind(&event.evidence_digest_hex).bind(event.occurred_at_unix_seconds)
             .execute(&mut *tx).await.map_err(backend)?;
         sqlx::query(
             "UPDATE investigator_cases SET version = $3 WHERE tenant_id = $1 AND case_id = $2",
         )
-        .bind(tenant_id)
+        .bind(tenant.as_str())
         .bind(case_id)
         .bind(new_version)
         .execute(&mut *tx)
@@ -133,14 +137,14 @@ impl InvestigatorCaseStore for PgInvestigatorCaseStore {
         Ok(CaseAppendOutcome::Applied { new_version })
     }
 
-    async fn history(&self, tenant_id: &str, case_id: &str) -> StorageResult<Vec<CaseEvent>> {
+    async fn history(&self, tenant: &TenantScope, case_id: &str) -> StorageResult<Vec<CaseEvent>> {
         let rows = sqlx::query("SELECT sequence, event_id, actor, kind, detail, evidence_digest_hex, occurred_at FROM investigator_case_events WHERE tenant_id = $1 AND case_id = $2 ORDER BY sequence")
-            .bind(tenant_id).bind(case_id).fetch_all(&self.pool).await.map_err(backend)?;
+            .bind(tenant.as_str()).bind(case_id).fetch_all(&self.pool).await.map_err(backend)?;
         rows.into_iter()
             .map(|row| {
                 Ok(CaseEvent {
                     event_id: row.try_get("event_id").map_err(backend)?,
-                    tenant_id: tenant_id.into(),
+                    tenant_id: tenant.as_str().into(),
                     case_id: case_id.into(),
                     sequence: row.try_get("sequence").map_err(backend)?,
                     actor: row.try_get("actor").map_err(backend)?,
@@ -195,14 +199,15 @@ impl PgProtocolObjectStore {
 
 #[async_trait]
 impl ProtocolObjectStore for PgProtocolObjectStore {
-    async fn put(&self, record: ProtocolObjectRecord) -> StorageResult<()> {
+    async fn put(&self, tenant: &TenantScope, record: ProtocolObjectRecord) -> StorageResult<()> {
         if record.object_id_hex.is_empty() {
             return Err(StorageError::EmptyField("object_id_hex"));
         }
         let inserted = sqlx::query(
-            "INSERT INTO protocol_objects (object_id_hex, kind, bytes) VALUES ($1, $2, $3) \
-             ON CONFLICT (object_id_hex) DO NOTHING",
+            "INSERT INTO protocol_objects (tenant_id, object_id_hex, kind, bytes) VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (tenant_id, object_id_hex) DO NOTHING",
         )
+        .bind(tenant.as_str())
         .bind(&record.object_id_hex)
         .bind(&record.kind)
         .bind(&record.bytes)
@@ -214,14 +219,16 @@ impl ProtocolObjectStore for PgProtocolObjectStore {
             return Ok(());
         }
         // Row already existed: enforce immutability by comparing bytes.
-        let existing: Vec<u8> =
-            sqlx::query("SELECT bytes FROM protocol_objects WHERE object_id_hex = $1")
-                .bind(&record.object_id_hex)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(backend)?
-                .try_get("bytes")
-                .map_err(backend)?;
+        let existing: Vec<u8> = sqlx::query(
+            "SELECT bytes FROM protocol_objects WHERE tenant_id = $1 AND object_id_hex = $2",
+        )
+        .bind(tenant.as_str())
+        .bind(&record.object_id_hex)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(backend)?
+        .try_get("bytes")
+        .map_err(backend)?;
         if existing == record.bytes {
             Ok(())
         } else {
@@ -231,12 +238,19 @@ impl ProtocolObjectStore for PgProtocolObjectStore {
         }
     }
 
-    async fn get(&self, object_id_hex: &str) -> StorageResult<Option<ProtocolObjectRecord>> {
-        let row = sqlx::query("SELECT kind, bytes FROM protocol_objects WHERE object_id_hex = $1")
-            .bind(object_id_hex)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(backend)?;
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        object_id_hex: &str,
+    ) -> StorageResult<Option<ProtocolObjectRecord>> {
+        let row = sqlx::query(
+            "SELECT kind, bytes FROM protocol_objects WHERE tenant_id = $1 AND object_id_hex = $2",
+        )
+        .bind(tenant.as_str())
+        .bind(object_id_hex)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(backend)?;
         row.map(|row| {
             Ok(ProtocolObjectRecord {
                 kind: row.try_get("kind").map_err(backend)?,
@@ -264,15 +278,20 @@ impl PgSealConsumptionStore {
 
 #[async_trait]
 impl SealConsumptionStore for PgSealConsumptionStore {
-    async fn put(&self, record: SealConsumptionProofRecord) -> StorageResult<()> {
+    async fn put(
+        &self,
+        tenant: &TenantScope,
+        record: SealConsumptionProofRecord,
+    ) -> StorageResult<()> {
         if record.mandate_id_hex.is_empty() {
             return Err(StorageError::EmptyField("mandate_id_hex"));
         }
         let inserted = sqlx::query(
             "INSERT INTO seal_consumption_proofs \
-             (mandate_id_hex, seal_id_hex, nullifier_hex, commitment_hex, anchor_backend) \
-             VALUES ($1, $2, $3, $4, $5) ON CONFLICT (mandate_id_hex) DO NOTHING",
+             (tenant_id, mandate_id_hex, seal_id_hex, nullifier_hex, commitment_hex, anchor_backend) \
+             VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (tenant_id, mandate_id_hex) DO NOTHING",
         )
+        .bind(tenant.as_str())
         .bind(&record.mandate_id_hex)
         .bind(&record.seal_id_hex)
         .bind(&record.nullifier_hex)
@@ -286,7 +305,7 @@ impl SealConsumptionStore for PgSealConsumptionStore {
             return Ok(());
         }
         // Row already existed: enforce immutability by comparing the stored proof.
-        match self.get(&record.mandate_id_hex).await? {
+        match self.get(tenant, &record.mandate_id_hex).await? {
             Some(existing) if existing == record => Ok(()),
             _ => Err(StorageError::ImmutableViolation {
                 object_id_hex: record.mandate_id_hex,
@@ -294,11 +313,16 @@ impl SealConsumptionStore for PgSealConsumptionStore {
         }
     }
 
-    async fn get(&self, mandate_id_hex: &str) -> StorageResult<Option<SealConsumptionProofRecord>> {
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        mandate_id_hex: &str,
+    ) -> StorageResult<Option<SealConsumptionProofRecord>> {
         let row = sqlx::query(
             "SELECT seal_id_hex, nullifier_hex, commitment_hex, anchor_backend \
-             FROM seal_consumption_proofs WHERE mandate_id_hex = $1",
+             FROM seal_consumption_proofs WHERE tenant_id = $1 AND mandate_id_hex = $2",
         )
+        .bind(tenant.as_str())
         .bind(mandate_id_hex)
         .fetch_optional(&self.pool)
         .await
@@ -332,13 +356,19 @@ impl PgMandateProjectionStore {
 
 #[async_trait]
 impl MandateProjectionStore for PgMandateProjectionStore {
-    async fn insert(&self, mandate_id_hex: &str, state: &str) -> StorageResult<()> {
+    async fn insert(
+        &self,
+        tenant: &TenantScope,
+        mandate_id_hex: &str,
+        state: &str,
+    ) -> StorageResult<()> {
         if mandate_id_hex.is_empty() {
             return Err(StorageError::EmptyField("mandate_id_hex"));
         }
         sqlx::query(
-            "INSERT INTO mandate_projections (mandate_id_hex, version, state) VALUES ($1, 1, $2)",
+            "INSERT INTO mandate_projections (tenant_id, mandate_id_hex, version, state) VALUES ($1, $2, 1, $3)",
         )
+        .bind(tenant.as_str())
         .bind(mandate_id_hex)
         .bind(state)
         .execute(&self.pool)
@@ -347,9 +377,14 @@ impl MandateProjectionStore for PgMandateProjectionStore {
         Ok(())
     }
 
-    async fn get(&self, mandate_id_hex: &str) -> StorageResult<Option<MandateProjection>> {
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        mandate_id_hex: &str,
+    ) -> StorageResult<Option<MandateProjection>> {
         let row =
-            sqlx::query("SELECT version, state FROM mandate_projections WHERE mandate_id_hex = $1")
+            sqlx::query("SELECT version, state FROM mandate_projections WHERE tenant_id = $1 AND mandate_id_hex = $2")
+                .bind(tenant.as_str())
                 .bind(mandate_id_hex)
                 .fetch_optional(&self.pool)
                 .await
@@ -366,16 +401,18 @@ impl MandateProjectionStore for PgMandateProjectionStore {
 
     async fn compare_and_swap(
         &self,
+        tenant: &TenantScope,
         mandate_id_hex: &str,
         expected_version: i64,
         new_state: &str,
     ) -> StorageResult<CasOutcome> {
         // Exactly one caller with the matching version wins the conditional update.
         let updated = sqlx::query(
-            "UPDATE mandate_projections SET version = version + 1, state = $3, \
+            "UPDATE mandate_projections SET version = version + 1, state = $4, \
              updated_at = extract(epoch from now())::bigint \
-             WHERE mandate_id_hex = $1 AND version = $2 RETURNING version",
+             WHERE tenant_id = $1 AND mandate_id_hex = $2 AND version = $3 RETURNING version",
         )
+        .bind(tenant.as_str())
         .bind(mandate_id_hex)
         .bind(expected_version)
         .bind(new_state)
@@ -389,7 +426,7 @@ impl MandateProjectionStore for PgMandateProjectionStore {
             });
         }
         // No update: distinguish a version conflict from a missing projection.
-        match self.get(mandate_id_hex).await? {
+        match self.get(tenant, mandate_id_hex).await? {
             Some(current) => Ok(CasOutcome::Conflict {
                 current_version: current.version,
             }),
@@ -414,14 +451,19 @@ impl PgWebhookReceiptStore {
 
 #[async_trait]
 impl WebhookReceiptStore for PgWebhookReceiptStore {
-    async fn record(&self, receipt: WebhookReceipt) -> StorageResult<WebhookRecordOutcome> {
+    async fn record(
+        &self,
+        tenant: &TenantScope,
+        receipt: WebhookReceipt,
+    ) -> StorageResult<WebhookRecordOutcome> {
         if receipt.delivery_id.is_empty() {
             return Err(StorageError::EmptyField("delivery_id"));
         }
         let inserted = sqlx::query(
-            "INSERT INTO webhook_receipts (delivery_id, source, raw_digest, received_at) \
-             VALUES ($1, $2, $3, $4) ON CONFLICT (delivery_id) DO NOTHING",
+            "INSERT INTO webhook_receipts (tenant_id, delivery_id, source, raw_digest, received_at) \
+             VALUES ($1, $2, $3, $4, $5) ON CONFLICT (tenant_id, delivery_id) DO NOTHING",
         )
+        .bind(tenant.as_str())
         .bind(&receipt.delivery_id)
         .bind(&receipt.source)
         .bind(receipt.raw_digest.to_hex())
@@ -436,10 +478,15 @@ impl WebhookReceiptStore for PgWebhookReceiptStore {
         }
     }
 
-    async fn get(&self, delivery_id: &str) -> StorageResult<Option<WebhookReceipt>> {
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        delivery_id: &str,
+    ) -> StorageResult<Option<WebhookReceipt>> {
         let row = sqlx::query(
-            "SELECT source, raw_digest, received_at FROM webhook_receipts WHERE delivery_id = $1",
+            "SELECT source, raw_digest, received_at FROM webhook_receipts WHERE tenant_id = $1 AND delivery_id = $2",
         )
+        .bind(tenant.as_str())
         .bind(delivery_id)
         .fetch_optional(&self.pool)
         .await
@@ -476,11 +523,12 @@ impl PgAuditLog {
 
 #[async_trait]
 impl AuditLog for PgAuditLog {
-    async fn append(&self, event: AuditEvent) -> StorageResult<()> {
+    async fn append(&self, tenant: &TenantScope, event: AuditEvent) -> StorageResult<()> {
         sqlx::query(
-            "INSERT INTO audit_events (occurred_at, actor, action, decision, detail) \
-             VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO audit_events (tenant_id, occurred_at, actor, action, decision, detail) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
         )
+        .bind(tenant.as_str())
         .bind(event.occurred_at_unix_seconds)
         .bind(event.actor.as_deref())
         .bind(&event.action)
@@ -492,11 +540,12 @@ impl AuditLog for PgAuditLog {
         Ok(())
     }
 
-    async fn recent(&self, limit: usize) -> StorageResult<Vec<AuditEvent>> {
+    async fn recent(&self, tenant: &TenantScope, limit: usize) -> StorageResult<Vec<AuditEvent>> {
         let rows = sqlx::query(
             "SELECT occurred_at, actor, action, decision, detail FROM audit_events \
-             ORDER BY id DESC LIMIT $1",
+             WHERE tenant_id = $1 ORDER BY id DESC LIMIT $2",
         )
+        .bind(tenant.as_str())
         .bind(i64::try_from(limit).unwrap_or(i64::MAX))
         .fetch_all(&self.pool)
         .await
@@ -532,16 +581,17 @@ impl PgExecutionAttemptStore {
 
 #[async_trait]
 impl ExecutionAttemptStore for PgExecutionAttemptStore {
-    async fn insert(&self, attempt: ExecutionAttempt) -> StorageResult<()> {
+    async fn insert(&self, tenant: &TenantScope, attempt: ExecutionAttempt) -> StorageResult<()> {
         if attempt.attempt_id_hex.is_empty() {
             return Err(StorageError::EmptyField("attempt_id_hex"));
         }
         sqlx::query(
             "INSERT INTO execution_attempts \
-             (attempt_id_hex, mandate_id_hex, state, created_at, intent_id_hex, \
+             (tenant_id, attempt_id_hex, mandate_id_hex, state, created_at, intent_id_hex, \
               reservation_token_digest, executor_identity, correlation_key, github_deployment_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         )
+        .bind(tenant.as_str())
         .bind(&attempt.attempt_id_hex)
         .bind(&attempt.mandate_id_hex)
         .bind(state_to_str(&attempt.state))
@@ -557,12 +607,17 @@ impl ExecutionAttemptStore for PgExecutionAttemptStore {
         Ok(())
     }
 
-    async fn get(&self, attempt_id_hex: &str) -> StorageResult<Option<ExecutionAttempt>> {
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        attempt_id_hex: &str,
+    ) -> StorageResult<Option<ExecutionAttempt>> {
         let row = sqlx::query(
             "SELECT mandate_id_hex, state, created_at, github_deployment_id, intent_id_hex, \
              reservation_token_digest, executor_identity, correlation_key \
-             FROM execution_attempts WHERE attempt_id_hex = $1",
+             FROM execution_attempts WHERE tenant_id = $1 AND attempt_id_hex = $2",
         )
+        .bind(tenant.as_str())
         .bind(attempt_id_hex)
         .fetch_optional(&self.pool)
         .await
@@ -591,16 +646,19 @@ impl ExecutionAttemptStore for PgExecutionAttemptStore {
 
     async fn update_state(
         &self,
+        tenant: &TenantScope,
         attempt_id_hex: &str,
         new_state: ExecutionAttemptState,
     ) -> StorageResult<()> {
-        let updated =
-            sqlx::query("UPDATE execution_attempts SET state = $2 WHERE attempt_id_hex = $1")
-                .bind(attempt_id_hex)
-                .bind(state_to_str(&new_state))
-                .execute(&self.pool)
-                .await
-                .map_err(backend)?;
+        let updated = sqlx::query(
+            "UPDATE execution_attempts SET state = $3 WHERE tenant_id = $1 AND attempt_id_hex = $2",
+        )
+        .bind(tenant.as_str())
+        .bind(attempt_id_hex)
+        .bind(state_to_str(&new_state))
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
         if updated.rows_affected() == 0 {
             return Err(StorageError::Backend(format!(
                 "execution attempt `{attempt_id_hex}` not found"
@@ -611,12 +669,14 @@ impl ExecutionAttemptStore for PgExecutionAttemptStore {
 
     async fn update_deployment_id(
         &self,
+        tenant: &TenantScope,
         attempt_id_hex: &str,
         deployment_id: u64,
     ) -> StorageResult<()> {
         let updated = sqlx::query(
-            "UPDATE execution_attempts SET github_deployment_id = $2 WHERE attempt_id_hex = $1",
+            "UPDATE execution_attempts SET github_deployment_id = $3 WHERE tenant_id = $1 AND attempt_id_hex = $2",
         )
+        .bind(tenant.as_str())
         .bind(attempt_id_hex)
         .bind(deployment_id as i64)
         .execute(&self.pool)
@@ -630,12 +690,17 @@ impl ExecutionAttemptStore for PgExecutionAttemptStore {
         Ok(())
     }
 
-    async fn by_mandate(&self, mandate_id_hex: &str) -> StorageResult<Vec<ExecutionAttempt>> {
+    async fn by_mandate(
+        &self,
+        tenant: &TenantScope,
+        mandate_id_hex: &str,
+    ) -> StorageResult<Vec<ExecutionAttempt>> {
         let rows = sqlx::query(
             "SELECT attempt_id_hex, state, created_at, github_deployment_id, intent_id_hex, \
              reservation_token_digest, executor_identity, correlation_key \
-             FROM execution_attempts WHERE mandate_id_hex = $1 ORDER BY created_at",
+             FROM execution_attempts WHERE tenant_id = $1 AND mandate_id_hex = $2 ORDER BY created_at",
         )
+        .bind(tenant.as_str())
         .bind(mandate_id_hex)
         .fetch_all(&self.pool)
         .await
@@ -665,13 +730,15 @@ impl ExecutionAttemptStore for PgExecutionAttemptStore {
 
     async fn by_deployment_id(
         &self,
+        tenant: &TenantScope,
         deployment_id: u64,
     ) -> StorageResult<Option<ExecutionAttempt>> {
         let row = sqlx::query(
             "SELECT attempt_id_hex, mandate_id_hex, state, created_at, github_deployment_id, \
              intent_id_hex, reservation_token_digest, executor_identity, correlation_key \
-             FROM execution_attempts WHERE github_deployment_id = $1",
+             FROM execution_attempts WHERE tenant_id = $1 AND github_deployment_id = $2",
         )
+        .bind(tenant.as_str())
         .bind(deployment_id as i64)
         .fetch_optional(&self.pool)
         .await
@@ -714,11 +781,15 @@ impl PgReceiptProjectionStore {
     /// Used by the evidence-export feed to publish receipts as they are
     /// produced. Ordering is deterministic (`created_at`, then id) so feed
     /// sequence numbers and emission clocks stay stable as new receipts append.
-    pub async fn list_ids_ordered(&self) -> StorageResult<Vec<(String, i64)>> {
+    pub async fn list_ids_ordered(
+        &self,
+        tenant: &TenantScope,
+    ) -> StorageResult<Vec<(String, i64)>> {
         let rows = sqlx::query(
             "SELECT receipt_id_hex, created_at FROM receipt_projections \
-             ORDER BY created_at, receipt_id_hex",
+             WHERE tenant_id = $1 ORDER BY created_at, receipt_id_hex",
         )
+        .bind(tenant.as_str())
         .fetch_all(&self.pool)
         .await
         .map_err(backend)?;
@@ -735,16 +806,17 @@ impl PgReceiptProjectionStore {
 
 #[async_trait]
 impl ReceiptProjectionStore for PgReceiptProjectionStore {
-    async fn insert(&self, receipt: ReceiptProjection) -> StorageResult<()> {
+    async fn insert(&self, tenant: &TenantScope, receipt: ReceiptProjection) -> StorageResult<()> {
         if receipt.receipt_id_hex.is_empty() {
             return Err(StorageError::EmptyField("receipt_id_hex"));
         }
         sqlx::query(
             "INSERT INTO receipt_projections \
-             (receipt_id_hex, mandate_id_hex, outcome, created_at, intent_id_hex, attempt_id_hex, \
+             (tenant_id, receipt_id_hex, mandate_id_hex, outcome, created_at, intent_id_hex, attempt_id_hex, \
               dispatch_evidence_refs, target_evidence_refs, evidence_gaps, canonical_bytes) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
         )
+        .bind(tenant.as_str())
         .bind(&receipt.receipt_id_hex)
         .bind(&receipt.mandate_id_hex)
         .bind(outcome_to_str(&receipt.outcome))
@@ -770,12 +842,17 @@ impl ReceiptProjectionStore for PgReceiptProjectionStore {
         Ok(())
     }
 
-    async fn get(&self, receipt_id_hex: &str) -> StorageResult<Option<ReceiptProjection>> {
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        receipt_id_hex: &str,
+    ) -> StorageResult<Option<ReceiptProjection>> {
         let row = sqlx::query(
             "SELECT mandate_id_hex, outcome, created_at, intent_id_hex, attempt_id_hex, \
              dispatch_evidence_refs, target_evidence_refs, evidence_gaps, canonical_bytes \
-             FROM receipt_projections WHERE receipt_id_hex = $1",
+             FROM receipt_projections WHERE tenant_id = $1 AND receipt_id_hex = $2",
         )
+        .bind(tenant.as_str())
         .bind(receipt_id_hex)
         .fetch_optional(&self.pool)
         .await
@@ -817,12 +894,17 @@ impl ReceiptProjectionStore for PgReceiptProjectionStore {
         .transpose()
     }
 
-    async fn by_mandate(&self, mandate_id_hex: &str) -> StorageResult<Vec<ReceiptProjection>> {
+    async fn by_mandate(
+        &self,
+        tenant: &TenantScope,
+        mandate_id_hex: &str,
+    ) -> StorageResult<Vec<ReceiptProjection>> {
         let rows = sqlx::query(
             "SELECT receipt_id_hex, outcome, created_at, intent_id_hex, attempt_id_hex, \
              dispatch_evidence_refs, target_evidence_refs, evidence_gaps, canonical_bytes \
-             FROM receipt_projections WHERE mandate_id_hex = $1 ORDER BY created_at",
+             FROM receipt_projections WHERE tenant_id = $1 AND mandate_id_hex = $2 ORDER BY created_at",
         )
+        .bind(tenant.as_str())
         .bind(mandate_id_hex)
         .fetch_all(&self.pool)
         .await
@@ -881,7 +963,7 @@ impl PgEvidenceNodeStore {
 
 #[async_trait]
 impl EvidenceNodeStore for PgEvidenceNodeStore {
-    async fn insert(&self, node: EvidenceNodeRecord) -> StorageResult<()> {
+    async fn insert(&self, tenant: &TenantScope, node: EvidenceNodeRecord) -> StorageResult<()> {
         if node.node_id_hex.is_empty() {
             return Err(StorageError::EmptyField("node_id_hex"));
         }
@@ -896,10 +978,11 @@ impl EvidenceNodeStore for PgEvidenceNodeStore {
         })?;
         sqlx::query(
             "INSERT INTO evidence_nodes \
-             (node_id_hex, registry_id, source, producer_identity, collected_at, \
+             (tenant_id, node_id_hex, registry_id, source, producer_identity, collected_at, \
               asserted_event_at, content_digest, media_type, disclosure_classification, relationships) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
         )
+        .bind(tenant.as_str())
         .bind(&node.node_id_hex)
         .bind(&node.registry_id)
         .bind(source_str)
@@ -916,12 +999,17 @@ impl EvidenceNodeStore for PgEvidenceNodeStore {
         Ok(())
     }
 
-    async fn get(&self, node_id_hex: &str) -> StorageResult<Option<EvidenceNodeRecord>> {
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        node_id_hex: &str,
+    ) -> StorageResult<Option<EvidenceNodeRecord>> {
         let row = sqlx::query(
             "SELECT registry_id, source, producer_identity, collected_at, asserted_event_at, \
              content_digest, media_type, disclosure_classification, relationships \
-             FROM evidence_nodes WHERE node_id_hex = $1",
+             FROM evidence_nodes WHERE tenant_id = $1 AND node_id_hex = $2",
         )
+        .bind(tenant.as_str())
         .bind(node_id_hex)
         .fetch_optional(&self.pool)
         .await
@@ -963,12 +1051,17 @@ impl EvidenceNodeStore for PgEvidenceNodeStore {
         .transpose()
     }
 
-    async fn by_mandate(&self, mandate_id_hex: &str) -> StorageResult<Vec<EvidenceNodeRecord>> {
+    async fn by_mandate(
+        &self,
+        tenant: &TenantScope,
+        mandate_id_hex: &str,
+    ) -> StorageResult<Vec<EvidenceNodeRecord>> {
         let rows = sqlx::query(
             "SELECT node_id_hex, registry_id, source, producer_identity, collected_at, \
              asserted_event_at, content_digest, media_type, disclosure_classification, relationships \
-             FROM evidence_nodes WHERE node_id_hex LIKE $1 ORDER BY collected_at",
+             FROM evidence_nodes WHERE tenant_id = $1 AND node_id_hex LIKE $2 ORDER BY collected_at",
         )
+        .bind(tenant.as_str())
         .bind(format!("{mandate_id_hex}%"))
         .fetch_all(&self.pool)
         .await
@@ -1103,7 +1196,7 @@ impl PgActionRequestStore {
 
 #[async_trait]
 impl ActionRequestStore for PgActionRequestStore {
-    async fn insert(&self, request: ActionRequest) -> StorageResult<()> {
+    async fn insert(&self, tenant: &TenantScope, request: ActionRequest) -> StorageResult<()> {
         if request.request_id.is_empty() {
             return Err(StorageError::EmptyField("request_id"));
         }
@@ -1111,9 +1204,10 @@ impl ActionRequestStore for PgActionRequestStore {
         // in-memory store. A duplicate id violates the primary key.
         sqlx::query(
             "INSERT INTO action_requests \
-             (request_id, requested_by, intent_id_hex, status, version, created_at) \
-             VALUES ($1, $2, $3, $4, 1, $5)",
+             (tenant_id, request_id, requested_by, intent_id_hex, status, version, created_at) \
+             VALUES ($1, $2, $3, $4, $5, 1, $6)",
         )
+        .bind(tenant.as_str())
         .bind(&request.request_id)
         .bind(&request.requested_by)
         .bind(&request.intent_id_hex)
@@ -1125,11 +1219,16 @@ impl ActionRequestStore for PgActionRequestStore {
         Ok(())
     }
 
-    async fn get(&self, request_id: &str) -> StorageResult<Option<ActionRequest>> {
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        request_id: &str,
+    ) -> StorageResult<Option<ActionRequest>> {
         let row = sqlx::query(
             "SELECT requested_by, intent_id_hex, status, created_at \
-             FROM action_requests WHERE request_id = $1",
+             FROM action_requests WHERE tenant_id = $1 AND request_id = $2",
         )
+        .bind(tenant.as_str())
         .bind(request_id)
         .fetch_optional(&self.pool)
         .await
@@ -1147,12 +1246,13 @@ impl ActionRequestStore for PgActionRequestStore {
         .transpose()
     }
 
-    async fn list(&self) -> StorageResult<Vec<ActionRequest>> {
+    async fn list(&self, tenant: &TenantScope) -> StorageResult<Vec<ActionRequest>> {
         // Insertion order (created_at, then id for a stable tiebreak).
         let rows = sqlx::query(
             "SELECT request_id, requested_by, intent_id_hex, status, created_at \
-             FROM action_requests ORDER BY created_at ASC, request_id ASC",
+             FROM action_requests WHERE tenant_id = $1 ORDER BY created_at ASC, request_id ASC",
         )
+        .bind(tenant.as_str())
         .fetch_all(&self.pool)
         .await
         .map_err(backend)?;
@@ -1172,15 +1272,17 @@ impl ActionRequestStore for PgActionRequestStore {
 
     async fn compare_and_swap(
         &self,
+        tenant: &TenantScope,
         request_id: &str,
         expected_version: i64,
         new_status: ActionRequestStatus,
     ) -> StorageResult<CasOutcome> {
         // Exactly one caller with the matching version wins the conditional update.
         let updated = sqlx::query(
-            "UPDATE action_requests SET version = version + 1, status = $3 \
-             WHERE request_id = $1 AND version = $2 RETURNING version",
+            "UPDATE action_requests SET version = version + 1, status = $4 \
+             WHERE tenant_id = $1 AND request_id = $2 AND version = $3 RETURNING version",
         )
+        .bind(tenant.as_str())
         .bind(request_id)
         .bind(expected_version)
         .bind(action_request_status_to_str(&new_status))
@@ -1194,11 +1296,14 @@ impl ActionRequestStore for PgActionRequestStore {
             });
         }
         // No row updated: distinguish a version conflict from a missing request.
-        let current = sqlx::query("SELECT version FROM action_requests WHERE request_id = $1")
-            .bind(request_id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(backend)?;
+        let current = sqlx::query(
+            "SELECT version FROM action_requests WHERE tenant_id = $1 AND request_id = $2",
+        )
+        .bind(tenant.as_str())
+        .bind(request_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(backend)?;
         match current {
             Some(row) => Ok(CasOutcome::Conflict {
                 current_version: row.try_get("version").map_err(backend)?,
@@ -1225,15 +1330,16 @@ impl PgApprovalDecisionStore {
 
 #[async_trait]
 impl ApprovalDecisionStore for PgApprovalDecisionStore {
-    async fn insert(&self, decision: ApprovalDecision) -> StorageResult<()> {
+    async fn insert(&self, tenant: &TenantScope, decision: ApprovalDecision) -> StorageResult<()> {
         if decision.decision_id.is_empty() {
             return Err(StorageError::EmptyField("decision_id"));
         }
         sqlx::query(
             "INSERT INTO approval_decisions \
-             (decision_id, request_id, decided_by, decision, intent_id_hex, decided_at) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
+             (tenant_id, decision_id, request_id, decided_by, decision, intent_id_hex, decided_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
+        .bind(tenant.as_str())
         .bind(&decision.decision_id)
         .bind(&decision.request_id)
         .bind(&decision.decided_by)
@@ -1246,11 +1352,16 @@ impl ApprovalDecisionStore for PgApprovalDecisionStore {
         Ok(())
     }
 
-    async fn get(&self, decision_id: &str) -> StorageResult<Option<ApprovalDecision>> {
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        decision_id: &str,
+    ) -> StorageResult<Option<ApprovalDecision>> {
         let row = sqlx::query(
             "SELECT request_id, decided_by, decision, intent_id_hex, decided_at \
-             FROM approval_decisions WHERE decision_id = $1",
+             FROM approval_decisions WHERE tenant_id = $1 AND decision_id = $2",
         )
+        .bind(tenant.as_str())
         .bind(decision_id)
         .fetch_optional(&self.pool)
         .await
@@ -1268,11 +1379,16 @@ impl ApprovalDecisionStore for PgApprovalDecisionStore {
         .transpose()
     }
 
-    async fn by_request(&self, request_id: &str) -> StorageResult<Vec<ApprovalDecision>> {
+    async fn by_request(
+        &self,
+        tenant: &TenantScope,
+        request_id: &str,
+    ) -> StorageResult<Vec<ApprovalDecision>> {
         let rows = sqlx::query(
             "SELECT decision_id, decided_by, decision, intent_id_hex, decided_at \
-             FROM approval_decisions WHERE request_id = $1 ORDER BY decided_at ASC, decision_id ASC",
+             FROM approval_decisions WHERE tenant_id = $1 AND request_id = $2 ORDER BY decided_at ASC, decision_id ASC",
         )
+        .bind(tenant.as_str())
         .bind(request_id)
         .fetch_all(&self.pool)
         .await

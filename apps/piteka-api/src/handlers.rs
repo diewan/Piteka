@@ -286,7 +286,7 @@ pub async fn get_receipt(
     State(ports): State<TestPorts>,
     Path(receipt_id): Path<String>,
 ) -> Response {
-    match ports.receipt_store.get(&receipt_id).await {
+    match ports.receipt_store.get(&ports.tenant, &receipt_id).await {
         Ok(Some(receipt)) => {
             let response = serde_json::json!({
                 "receipt_id": receipt.receipt_id_hex,
@@ -322,6 +322,7 @@ pub async fn export_bundle(
     Path(receipt_id): Path<String>,
 ) -> Response {
     match assemble_bundle(
+        &ports.tenant,
         &ports.receipt_store,
         &ports.evidence_store,
         &ports.evidence_blob_store,
@@ -355,7 +356,7 @@ pub async fn get_receipt_canonical(
     State(ports): State<TestPorts>,
     Path(receipt_id): Path<String>,
 ) -> Response {
-    match ports.receipt_store.get(&receipt_id).await {
+    match ports.receipt_store.get(&ports.tenant, &receipt_id).await {
         Ok(Some(receipt)) => match receipt.canonical_bytes {
             Some(bytes) => (StatusCode::OK, bytes).into_response(),
             None => ApiError::not_found("canonical receipt bytes", &receipt_id).into_response(),

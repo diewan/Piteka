@@ -10,10 +10,8 @@
 //! SSO (see `piteka/docs/adr/ADR-0001-demo-identity-and-sessions.md`). OIDC and
 //! full RBAC/ABAC precede any pilot.
 
-use piteka_application::{
-    AuthenticatedSession, AuthorizationRequest, Clock, Denial, ReauthPolicy,
-};
-use piteka_storage::{AuditEvent, AuditLog, StorageError};
+use piteka_application::{AuthenticatedSession, AuthorizationRequest, Clock, Denial, ReauthPolicy};
+use piteka_storage::{AuditEvent, AuditLog, StorageError, TenantScope};
 
 /// Clear warning that the demo identity layer is not production-grade.
 pub const NON_PRODUCTION_IDENTITY_WARNING: &str = "Non-production identity: demo sessions are \
@@ -66,6 +64,7 @@ pub type AuthorizationOutcome = Result<Grant, Denied>;
 
 /// Enforces the demo authorization policy and records denials.
 pub struct DemoAuthorizationBoundary<L, C> {
+    tenant: TenantScope,
     audit: L,
     clock: C,
     policy: ReauthPolicy,
@@ -73,8 +72,9 @@ pub struct DemoAuthorizationBoundary<L, C> {
 
 impl<L: AuditLog, C: Clock> DemoAuthorizationBoundary<L, C> {
     /// Builds a boundary over an audit log, clock, and re-auth policy.
-    pub const fn new(audit: L, clock: C, policy: ReauthPolicy) -> Self {
+    pub fn new(tenant: TenantScope, audit: L, clock: C, policy: ReauthPolicy) -> Self {
         Self {
+            tenant,
             audit,
             clock,
             policy,
@@ -107,16 +107,23 @@ impl<L: AuditLog, C: Clock> DemoAuthorizationBoundary<L, C> {
 
         match self.policy.evaluate(session, request, now) {
             Ok(()) => {
-                if request.sensitivity == piteka_application::ActionSensitivity::ProductionApproval {
+                if request.sensitivity == piteka_application::ActionSensitivity::ProductionApproval
+                {
                     self.audit
-                        .append(event(now, &actor, action_detail, "granted", "production approval"))
+                        .append(
+                            &self.tenant,
+                            event(now, &actor, action_detail, "granted", "production approval"),
+                        )
                         .await?;
                 }
                 Ok(Ok(Grant { request: *request }))
             }
             Err(denial) => {
                 self.audit
-                    .append(event(now, &actor, action_detail, "denied", &denial.to_string()))
+                    .append(
+                        &self.tenant,
+                        event(now, &actor, action_detail, "denied", &denial.to_string()),
+                    )
                     .await?;
                 Ok(Err(Denied { denial }))
             }
@@ -124,7 +131,13 @@ impl<L: AuditLog, C: Clock> DemoAuthorizationBoundary<L, C> {
     }
 }
 
-fn event(now_unix_seconds: u64, actor: &str, action: &str, decision: &str, detail: &str) -> AuditEvent {
+fn event(
+    now_unix_seconds: u64,
+    actor: &str,
+    action: &str,
+    decision: &str,
+    detail: &str,
+) -> AuditEvent {
     AuditEvent {
         occurred_at_unix_seconds: i64::try_from(now_unix_seconds).unwrap_or(i64::MAX),
         actor: Some(actor.to_string()),

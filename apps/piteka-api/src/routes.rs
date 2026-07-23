@@ -80,6 +80,7 @@ pub fn build_full_router_with_webhook(ports: TestPorts) -> Router {
 /// Builds the PostgreSQL-backed live webhook route.
 pub async fn build_live_webhook_router(
     database_url: &str,
+    tenant: piteka_storage::TenantScope,
 ) -> Result<Router, piteka_storage::StorageError> {
     let pool = piteka_storage::postgres::connect(database_url).await?;
     piteka_storage::postgres::run_migrations(&pool).await?;
@@ -89,12 +90,14 @@ pub async fn build_live_webhook_router(
         pool.clone(),
     ));
     let processor = piteka_application::ReceiptProducingProcessor::new(
+        tenant.clone(),
         piteka_storage::postgres::PgReceiptProjectionStore::new(pool.clone()),
         piteka_storage::postgres::PgEvidenceNodeStore::new(pool),
         audit.clone(),
         attempts,
     );
     let ingestion = piteka_application::WebhookIngestionUseCase::new(
+        tenant,
         piteka_application::WebhookIngestionPorts::new(processor, webhook_receipts, audit),
     );
     let state = crate::webhook::WebhookStateConcrete {
@@ -118,6 +121,7 @@ pub async fn build_live_webhook_router(
 /// each is a cheap clone over a shared connection pool.
 #[derive(Clone)]
 pub struct ReadState {
+    tenant: piteka_storage::TenantScope,
     receipts: PgReceiptProjectionStore,
     evidence: PgEvidenceNodeStore,
     seals: PgSealConsumptionStore,
@@ -134,10 +138,12 @@ pub struct ReadState {
 /// trusts a verdict from here (Master Plan §32).
 pub async fn build_live_read_router(
     database_url: &str,
+    tenant: piteka_storage::TenantScope,
 ) -> Result<Router, piteka_storage::StorageError> {
     let pool = piteka_storage::postgres::connect(database_url).await?;
     piteka_storage::postgres::run_migrations(&pool).await?;
     let state = ReadState {
+        tenant,
         receipts: PgReceiptProjectionStore::new(pool.clone()),
         evidence: PgEvidenceNodeStore::new(pool.clone()),
         seals: PgSealConsumptionStore::new(pool.clone()),
@@ -158,13 +164,13 @@ pub async fn build_live_read_router(
 
 /// `GET /api/v1/receipts` — every receipt, newest first.
 async fn list_receipts(State(state): State<ReadState>) -> Response {
-    let ids = match state.receipts.list_ids_ordered().await {
+    let ids = match state.receipts.list_ids_ordered(&state.tenant).await {
         Ok(ids) => ids,
         Err(err) => return ApiError::from(err).into_response(),
     };
     let mut summaries = Vec::with_capacity(ids.len());
     for (id, _created) in ids {
-        match state.receipts.get(&id).await {
+        match state.receipts.get(&state.tenant, &id).await {
             Ok(Some(receipt)) => summaries.push(ReceiptSummary {
                 receipt_id: receipt.receipt_id_hex,
                 mandate_id: receipt.mandate_id_hex,
@@ -181,7 +187,7 @@ async fn list_receipts(State(state): State<ReadState>) -> Response {
 
 /// `GET /api/v1/receipts/{id}` — one receipt projection.
 async fn get_receipt(State(state): State<ReadState>, Path(id): Path<String>) -> Response {
-    match state.receipts.get(&id).await {
+    match state.receipts.get(&state.tenant, &id).await {
         Ok(Some(receipt)) => Json(receipt_detail(receipt)).into_response(),
         Ok(None) => ApiError::not_found("receipt", &id).into_response(),
         Err(err) => ApiError::from(err).into_response(),
@@ -191,12 +197,20 @@ async fn get_receipt(State(state): State<ReadState>, Path(id): Path<String>) -> 
 /// `GET /api/v1/receipts/{id}/export` — the bundle-export manifest bytes for
 /// local verification in Hemion.
 async fn export_receipt(State(state): State<ReadState>, Path(id): Path<String>) -> Response {
-    match state.receipts.get(&id).await {
+    match state.receipts.get(&state.tenant, &id).await {
         Ok(None) => return ApiError::not_found("receipt", &id).into_response(),
         Err(err) => return ApiError::from(err).into_response(),
         Ok(Some(_)) => {}
     }
-    match export_manifest_bytes(&state.receipts, &state.evidence, &state.seals, &id).await {
+    match export_manifest_bytes(
+        &state.tenant,
+        &state.receipts,
+        &state.evidence,
+        &state.seals,
+        &id,
+    )
+    .await
+    {
         Ok(bytes) => (
             [(axum::http::header::CONTENT_TYPE, "application/json")],
             bytes,
@@ -210,7 +224,7 @@ async fn export_receipt(State(state): State<ReadState>, Path(id): Path<String>) 
 
 /// `GET /api/v1/mandates/{id}` — one mandate projection.
 async fn get_mandate(State(state): State<ReadState>, Path(id): Path<String>) -> Response {
-    match state.mandates.get(&id).await {
+    match state.mandates.get(&state.tenant, &id).await {
         Ok(Some(mandate)) => Json(MandateDetail {
             mandate_id: mandate.mandate_id_hex,
             state: mandate.state,
@@ -225,16 +239,16 @@ async fn get_mandate(State(state): State<ReadState>, Path(id): Path<String>) -> 
 /// `GET /api/v1/mandates/{id}/chain` — the assembled accountability chain:
 /// mandate → audit timeline → execution attempts → receipts → evidence nodes.
 async fn get_mandate_chain(State(state): State<ReadState>, Path(id): Path<String>) -> Response {
-    let mandate = match state.mandates.get(&id).await {
+    let mandate = match state.mandates.get(&state.tenant, &id).await {
         Ok(Some(mandate)) => mandate,
         Ok(None) => return ApiError::not_found("mandate", &id).into_response(),
         Err(err) => return ApiError::from(err).into_response(),
     };
-    let receipts = match state.receipts.by_mandate(&id).await {
+    let receipts = match state.receipts.by_mandate(&state.tenant, &id).await {
         Ok(receipts) => receipts,
         Err(err) => return ApiError::from(err).into_response(),
     };
-    let attempts = match state.attempts.by_mandate(&id).await {
+    let attempts = match state.attempts.by_mandate(&state.tenant, &id).await {
         Ok(attempts) => attempts,
         Err(err) => return ApiError::from(err).into_response(),
     };
@@ -254,7 +268,7 @@ async fn get_mandate_chain(State(state): State<ReadState>, Path(id): Path<String
     }
     let mut evidence = Vec::with_capacity(evidence_ids.len());
     for node_id in &evidence_ids {
-        match state.evidence.get(node_id).await {
+        match state.evidence.get(&state.tenant, node_id).await {
             Ok(Some(node)) => evidence.push(chain_evidence(node)),
             Ok(None) => {}
             Err(err) => return ApiError::from(err).into_response(),
@@ -275,7 +289,7 @@ async fn get_mandate_chain(State(state): State<ReadState>, Path(id): Path<String
     for attempt in &attempts {
         match_ids.push(attempt.attempt_id_hex.clone());
     }
-    let recent = match state.audit.recent(2000).await {
+    let recent = match state.audit.recent(&state.tenant, 2000).await {
         Ok(events) => events,
         Err(err) => return ApiError::from(err).into_response(),
     };

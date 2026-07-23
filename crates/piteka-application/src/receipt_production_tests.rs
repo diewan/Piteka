@@ -13,6 +13,10 @@ use piteka_storage::model::{
 };
 use piteka_storage::ports::{EvidenceNodeStore, ExecutionAttemptStore, ReceiptProjectionStore};
 
+fn tenant() -> piteka_storage::TenantScope {
+    piteka_storage::TenantScope::new("test-tenant").unwrap()
+}
+
 // ---------------------------------------------------------------------------
 // Helper: create a sample deployment status payload
 // ---------------------------------------------------------------------------
@@ -162,12 +166,16 @@ async fn produce_receipt_from_webhook_success() {
 
     // Insert a sample execution attempt.
     let attempt = sample_attempt(12345);
-    attempt_store.insert(attempt.clone()).await.unwrap();
+    attempt_store
+        .insert(&tenant(), attempt.clone())
+        .await
+        .unwrap();
 
     let payload = sample_deployment_success_payload(12345);
     let event = parse_deployment_status(&payload).expect("should parse");
 
     let result = produce_receipt_from_webhook(
+        &tenant(),
         &receipt_store,
         &evidence_store,
         &audit_log,
@@ -185,7 +193,7 @@ async fn produce_receipt_from_webhook_success() {
 
     // Verify receipt was stored.
     let stored_receipt = receipt_store
-        .get(&result.receipt_id_hex)
+        .get(&tenant(), &result.receipt_id_hex)
         .await
         .unwrap()
         .unwrap();
@@ -193,7 +201,7 @@ async fn produce_receipt_from_webhook_success() {
     assert_eq!(stored_receipt.mandate_id_hex, "mand-001");
 
     // Verify evidence nodes were stored.
-    let nodes = evidence_store.by_mandate("").await.unwrap();
+    let nodes = evidence_store.by_mandate(&tenant(), "").await.unwrap();
     assert!(!nodes.is_empty());
 
     // Verify source attribution.
@@ -221,12 +229,13 @@ async fn produce_receipt_from_webhook_failure_outcome() {
     let audit_log = InMemoryAuditLog::default();
 
     let attempt = sample_attempt(99999);
-    attempt_store.insert(attempt).await.unwrap();
+    attempt_store.insert(&tenant(), attempt).await.unwrap();
 
     let payload = sample_deployment_failure_payload(99999);
     let event = parse_deployment_status(&payload).expect("should parse");
 
     let result = produce_receipt_from_webhook(
+        &tenant(),
         &receipt_store,
         &evidence_store,
         &audit_log,
@@ -249,12 +258,13 @@ async fn produce_receipt_from_webhook_unknown_outcome() {
     let audit_log = InMemoryAuditLog::default();
 
     let attempt = sample_attempt(77777);
-    attempt_store.insert(attempt).await.unwrap();
+    attempt_store.insert(&tenant(), attempt).await.unwrap();
 
     let payload = sample_deployment_pending_payload(77777);
     let event = parse_deployment_status(&payload).expect("should parse");
 
     let result = produce_receipt_from_webhook(
+        &tenant(),
         &receipt_store,
         &evidence_store,
         &audit_log,
@@ -284,6 +294,7 @@ async fn produce_receipt_from_webhook_no_matching_attempt() {
     let event = parse_deployment_status(&payload).expect("should parse");
 
     let result = produce_receipt_from_webhook(
+        &tenant(),
         &receipt_store,
         &evidence_store,
         &audit_log,
@@ -311,12 +322,13 @@ async fn evidence_nodes_have_source_attribution() {
     let audit_log = InMemoryAuditLog::default();
 
     let attempt = sample_attempt(55555);
-    attempt_store.insert(attempt).await.unwrap();
+    attempt_store.insert(&tenant(), attempt).await.unwrap();
 
     let payload = sample_deployment_success_payload(55555);
     let event = parse_deployment_status(&payload).expect("should parse");
 
     let _ = produce_receipt_from_webhook(
+        &tenant(),
         &receipt_store,
         &evidence_store,
         &audit_log,
@@ -327,7 +339,7 @@ async fn evidence_nodes_have_source_attribution() {
     .await
     .unwrap();
 
-    let nodes = evidence_store.by_mandate("").await.unwrap();
+    let nodes = evidence_store.by_mandate(&tenant(), "").await.unwrap();
 
     // Count sources.
     let mut piteka_count = 0;
@@ -362,12 +374,13 @@ async fn receipt_stores_evidence_references() {
     let audit_log = InMemoryAuditLog::default();
 
     let attempt = sample_attempt(33333);
-    attempt_store.insert(attempt).await.unwrap();
+    attempt_store.insert(&tenant(), attempt).await.unwrap();
 
     let payload = sample_deployment_success_payload(33333);
     let event = parse_deployment_status(&payload).expect("should parse");
 
     let result = produce_receipt_from_webhook(
+        &tenant(),
         &receipt_store,
         &evidence_store,
         &audit_log,
@@ -379,7 +392,7 @@ async fn receipt_stores_evidence_references() {
     .unwrap();
 
     let stored = receipt_store
-        .get(&result.receipt_id_hex)
+        .get(&tenant(), &result.receipt_id_hex)
         .await
         .unwrap()
         .unwrap();

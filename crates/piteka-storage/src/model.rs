@@ -6,6 +6,36 @@
 
 use crate::digest::ContentDigest;
 
+/// Validated tenant context required at every repository boundary.
+///
+/// This is deliberately not constructible from an empty or ambiguous string.
+/// Application adapters derive it from the authenticated organization and pass
+/// it separately from caller-controlled object identifiers.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TenantScope(String);
+
+impl TenantScope {
+    /// Validates and constructs a tenant scope.
+    pub fn new(value: impl Into<String>) -> crate::StorageResult<Self> {
+        let value = value.into();
+        if value.is_empty()
+            || value.len() > 128
+            || !value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+            })
+        {
+            return Err(crate::StorageError::InvalidTenantScope);
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the validated storage identifier.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A canonical Parwana object stored as an immutable, id-addressed blob.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProtocolObjectRecord {

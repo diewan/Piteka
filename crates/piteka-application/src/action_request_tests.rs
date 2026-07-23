@@ -76,7 +76,10 @@ impl ActionRequestPorts for TestPorts {
 }
 
 fn use_case(clock: StepClock) -> ActionRequestUseCase<TestPorts> {
-    ActionRequestUseCase::new(TestPorts::new(clock))
+    ActionRequestUseCase::new(
+        piteka_storage::TenantScope::new("test-tenant").unwrap(),
+        TestPorts::new(clock),
+    )
 }
 
 fn requester() -> UserId {
@@ -104,7 +107,7 @@ async fn propose_creates_a_pending_request_and_audits() {
         Some("intent-abc123".to_string())
     );
 
-    let events = uc.audit_log().recent(10).await.unwrap();
+    let events = uc.recent_audit(10).await.unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].action, "propose_action");
     assert_eq!(events[0].decision, "granted");
@@ -143,7 +146,7 @@ async fn approve_transitions_pending_to_approved_with_cas() {
     );
     assert_eq!(result.decision.decided_by, "approver");
 
-    let events = uc.audit_log().recent(10).await.unwrap();
+    let events = uc.recent_audit(10).await.unwrap();
     assert_eq!(events.len(), 2); // propose + approve
     assert_eq!(events[1].action, "approve_action");
     assert_eq!(events[1].decision, "granted");
@@ -215,7 +218,7 @@ async fn reject_transitions_pending_to_rejected() {
     assert_eq!(result.request.status, ActionRequestStatus::Rejected);
     assert_eq!(result.decision.decision, "rejected");
 
-    let events = uc.audit_log().recent(10).await.unwrap();
+    let events = uc.recent_audit(10).await.unwrap();
     assert_eq!(events.len(), 2);
     assert_eq!(events[1].action, "reject_action");
     assert_eq!(events[1].decision, "denied");
@@ -250,7 +253,7 @@ async fn revoke_transitions_approved_to_revoked() {
     let result = uc.revoke("req-1", approver(), 2).await.unwrap();
     assert_eq!(result.request.status, ActionRequestStatus::Revoked);
 
-    let events = uc.audit_log().recent(10).await.unwrap();
+    let events = uc.recent_audit(10).await.unwrap();
     assert_eq!(events.len(), 3); // propose + approve + revoke
     assert_eq!(events[2].action, "revoke_mandate");
     assert_eq!(events[2].decision, "granted");

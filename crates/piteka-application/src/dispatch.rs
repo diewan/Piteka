@@ -268,14 +268,15 @@ pub fn compute_attempt_digest(attempt_id: &str, mandate_id: &str, intent_id: &st
 /// fail with [`DispatchError::AlreadyConsumed`].
 #[derive(Clone)]
 pub struct DispatchUseCase<P> {
+    tenant: piteka_storage::TenantScope,
     ports: P,
 }
 
 impl<P: DispatchPorts> DispatchUseCase<P> {
     /// Creates a new dispatch use-case orchestrator.
     #[must_use]
-    pub const fn new(ports: P) -> Self {
-        Self { ports }
+    pub fn new(tenant: piteka_storage::TenantScope, ports: P) -> Self {
+        Self { tenant, ports }
     }
 
     /// Reserves a mandate and dispatches to the provider.
@@ -336,7 +337,7 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
         let request = self
             .ports
             .request_store()
-            .get(request_id)
+            .get(&self.tenant, request_id)
             .await?
             .ok_or_else(|| DispatchError::NotFound(request_id.to_string()))?;
 
@@ -350,7 +351,12 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
         let cas_result = self
             .ports
             .mandate_store()
-            .compare_and_swap(mandate_id_hex, expected_mandate_version, "reserved")
+            .compare_and_swap(
+                &self.tenant,
+                mandate_id_hex,
+                expected_mandate_version,
+                "reserved",
+            )
             .await?;
 
         match cas_result {
@@ -370,27 +376,40 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
                     github_deployment_id: None,
                 };
 
-                self.ports.attempt_store().insert(attempt).await?;
+                self.ports
+                    .attempt_store()
+                    .insert(&self.tenant, attempt)
+                    .await?;
 
                 // 4. Transition attempt to Dispatching.
                 self.ports
                     .attempt_store()
-                    .update_state(&attempt_id_hex, ExecutionAttemptState::Dispatching)
+                    .update_state(
+                        &self.tenant,
+                        &attempt_id_hex,
+                        ExecutionAttemptState::Dispatching,
+                    )
                     .await?;
 
                 // 5. Record audit event.
                 self.ports
                     .audit_log()
-                    .append(piteka_storage::AuditEvent {
-                        occurred_at_unix_seconds: now,
-                        actor: Some(executor_identity.to_string()),
-                        action: "reserve_mandate".to_string(),
-                        decision: "granted".to_string(),
-                        detail: format!(
-                            "mandate {} reserved for request {}, attempt {}, version {}",
-                            mandate_id_hex, request_id, attempt_id_hex, expected_mandate_version
-                        ),
-                    })
+                    .append(
+                        &self.tenant,
+                        piteka_storage::AuditEvent {
+                            occurred_at_unix_seconds: now,
+                            actor: Some(executor_identity.to_string()),
+                            action: "reserve_mandate".to_string(),
+                            decision: "granted".to_string(),
+                            detail: format!(
+                                "mandate {} reserved for request {}, attempt {}, version {}",
+                                mandate_id_hex,
+                                request_id,
+                                attempt_id_hex,
+                                expected_mandate_version
+                            ),
+                        },
+                    )
                     .await?;
 
                 Ok(DispatchOutcome::Dispatched(Dispatched {
@@ -409,7 +428,12 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
                 // returning so the rejection itself becomes append-only
                 // evidence. A merely reserved mandate remains a normal
                 // concurrent reservation conflict.
-                if let Some(projection) = self.ports.mandate_store().get(mandate_id_hex).await? {
+                if let Some(projection) = self
+                    .ports
+                    .mandate_store()
+                    .get(&self.tenant, mandate_id_hex)
+                    .await?
+                {
                     if matches!(
                         projection.state.as_str(),
                         "consumed" | "quarantined" | "abandoned"
@@ -420,7 +444,7 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
                         );
                         self.ports
                             .audit_log()
-                            .append(piteka_storage::AuditEvent {
+                            .append(&self.tenant, piteka_storage::AuditEvent {
                                 occurred_at_unix_seconds: now,
                                 actor: Some(executor_identity.to_string()),
                                 action: "execute_approved_deployment".to_string(),
@@ -496,20 +520,29 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
             // Provider accepted: transition attempt to Accepted, mandate to Consumed.
             self.ports
                 .attempt_store()
-                .update_state(attempt_id_hex, ExecutionAttemptState::Accepted)
+                .update_state(
+                    &self.tenant,
+                    attempt_id_hex,
+                    ExecutionAttemptState::Accepted,
+                )
                 .await?;
 
             // Record the GitHub deployment ID for webhook correlation (E-04).
             self.ports
                 .attempt_store()
-                .update_deployment_id(attempt_id_hex, deployment_id)
+                .update_deployment_id(&self.tenant, attempt_id_hex, deployment_id)
                 .await?;
 
             // CAS the mandate to Consumed.
             let cas_result = self
                 .ports
                 .mandate_store()
-                .compare_and_swap(mandate_id_hex, expected_mandate_version, "consumed")
+                .compare_and_swap(
+                    &self.tenant,
+                    mandate_id_hex,
+                    expected_mandate_version,
+                    "consumed",
+                )
                 .await?;
 
             match cas_result {
@@ -518,16 +551,19 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
                     // provider outcome evidence arrives via webhook.
                     self.ports
                         .audit_log()
-                        .append(piteka_storage::AuditEvent {
-                            occurred_at_unix_seconds: now,
-                            actor: Some(executor_identity.to_string()),
-                            action: "consume_mandate".to_string(),
-                            decision: "granted".to_string(),
-                            detail: format!(
-                                "mandate {} consumed after provider acceptance, attempt {}",
-                                mandate_id_hex, attempt_id_hex
-                            ),
-                        })
+                        .append(
+                            &self.tenant,
+                            piteka_storage::AuditEvent {
+                                occurred_at_unix_seconds: now,
+                                actor: Some(executor_identity.to_string()),
+                                action: "consume_mandate".to_string(),
+                                decision: "granted".to_string(),
+                                detail: format!(
+                                    "mandate {} consumed after provider acceptance, attempt {}",
+                                    mandate_id_hex, attempt_id_hex
+                                ),
+                            },
+                        )
                         .await?;
                 }
                 CasOutcome::Conflict { .. } => {
@@ -543,14 +579,23 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
             // Provider failed or outcome ambiguous: transition to Quarantined.
             self.ports
                 .attempt_store()
-                .update_state(attempt_id_hex, ExecutionAttemptState::OutcomeAmbiguous)
+                .update_state(
+                    &self.tenant,
+                    attempt_id_hex,
+                    ExecutionAttemptState::OutcomeAmbiguous,
+                )
                 .await?;
 
             // CAS the mandate to Quarantined.
             let cas_result = self
                 .ports
                 .mandate_store()
-                .compare_and_swap(mandate_id_hex, expected_mandate_version, "quarantined")
+                .compare_and_swap(
+                    &self.tenant,
+                    mandate_id_hex,
+                    expected_mandate_version,
+                    "quarantined",
+                )
                 .await?;
 
             match cas_result {
@@ -560,16 +605,19 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
                     // subsequent receipt production.
                     self.ports
                         .audit_log()
-                        .append(piteka_storage::AuditEvent {
-                            occurred_at_unix_seconds: now,
-                            actor: Some(executor_identity.to_string()),
-                            action: "quarantine_mandate".to_string(),
-                            decision: "denied".to_string(),
-                            detail: format!(
-                                "mandate {} quarantined after provider failure, attempt {}",
-                                mandate_id_hex, attempt_id_hex
-                            ),
-                        })
+                        .append(
+                            &self.tenant,
+                            piteka_storage::AuditEvent {
+                                occurred_at_unix_seconds: now,
+                                actor: Some(executor_identity.to_string()),
+                                action: "quarantine_mandate".to_string(),
+                                decision: "denied".to_string(),
+                                detail: format!(
+                                    "mandate {} quarantined after provider failure, attempt {}",
+                                    mandate_id_hex, attempt_id_hex
+                                ),
+                            },
+                        )
                         .await?;
                 }
                 CasOutcome::Conflict { .. } => {

@@ -114,6 +114,8 @@ pub fn demo_correlation_key(mandate_id: &str) -> String {
 /// wiring and the Postgres binary wiring without duplicating the port glue.
 #[derive(Clone)]
 pub struct DemoPorts {
+    /// Repository-enforced tenant scope for every storage operation.
+    pub tenant: piteka_storage::TenantScope,
     /// Action request store (proposal + approval status projection).
     pub requests: Arc<dyn ActionRequestStore>,
     /// Approval decision store.
@@ -182,7 +184,7 @@ pub async fn human_approve(
     request_id: &str,
     intent_id: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let actions = ActionRequestUseCase::new(ports.clone());
+    let actions = ActionRequestUseCase::new(ports.tenant.clone(), ports.clone());
     actions
         .approve(
             request_id,
@@ -192,7 +194,10 @@ pub async fn human_approve(
         )
         .await?;
     let mandate_id = demo_mandate_id(intent_id);
-    ports.mandates.insert(&mandate_id, "issued").await?;
+    ports
+        .mandates
+        .insert(&ports.tenant, &mandate_id, "issued")
+        .await?;
     Ok(mandate_id)
 }
 
@@ -246,7 +251,12 @@ impl<G: GitHubAppPort> AccountabilityTools for AgentDemoBackend<G> {
         commit_sha: &str,
         environment_id: u64,
     ) -> Result<String, McpError> {
-        Ok(demo_intent_id(tenant, repository_id, commit_sha, environment_id))
+        Ok(demo_intent_id(
+            tenant,
+            repository_id,
+            commit_sha,
+            environment_id,
+        ))
     }
 
     async fn request_deployment(
@@ -257,7 +267,7 @@ impl<G: GitHubAppPort> AccountabilityTools for AgentDemoBackend<G> {
         self.check_target(input.repository_id, input.environment_id)?;
         let requester = UserId::new(identity.service_identity())
             .map_err(|_| McpError::new("UNAUTHENTICATED", "Invalid service identity"))?;
-        let actions = ActionRequestUseCase::new(self.ports.clone());
+        let actions = ActionRequestUseCase::new(self.ports.tenant.clone(), self.ports.clone());
         actions
             .propose(&input.request_id, requester, Some(input.intent_id.clone()))
             .await
@@ -272,17 +282,15 @@ impl<G: GitHubAppPort> AccountabilityTools for AgentDemoBackend<G> {
         }))
     }
 
-    async fn get_action_status(
-        &self,
-        identity: &McpIdentity,
-        id: &str,
-    ) -> Result<Value, McpError> {
+    async fn get_action_status(&self, identity: &McpIdentity, id: &str) -> Result<Value, McpError> {
         let request = self
             .ports
             .requests
-            .get(id)
+            .get(&self.ports.tenant, id)
             .await
-            .map_err(|error| McpError::new("INTERNAL_ERROR", format!("Status read failed: {error}")))?
+            .map_err(|error| {
+                McpError::new("INTERNAL_ERROR", format!("Status read failed: {error}"))
+            })?
             .ok_or_else(|| McpError::new("NOT_FOUND", "Unknown action request"))?;
 
         let status = format!("{:?}", request.status).to_lowercase();
@@ -301,7 +309,7 @@ impl<G: GitHubAppPort> AccountabilityTools for AgentDemoBackend<G> {
                 if self
                     .ports
                     .mandates
-                    .get(&mandate_id)
+                    .get(&self.ports.tenant, &mandate_id)
                     .await
                     .map_err(|error| {
                         McpError::new("INTERNAL_ERROR", format!("Mandate read failed: {error}"))
@@ -346,7 +354,7 @@ impl<G: GitHubAppPort> AccountabilityTools for AgentDemoBackend<G> {
         let reservation_digest = demo_reservation_digest(&input.mandate_id);
         let correlation_key = demo_correlation_key(&input.mandate_id);
 
-        let dispatch = DispatchUseCase::new(self.ports.clone());
+        let dispatch = DispatchUseCase::new(self.ports.tenant.clone(), self.ports.clone());
         let reserved = dispatch
             .reserve(
                 &input.request_id,
@@ -472,7 +480,7 @@ impl<G: GitHubAppPort> AccountabilityTools for AgentDemoBackend<G> {
         let attempt = if let Some(attempt) = self
             .ports
             .attempts
-            .get(id)
+            .get(&self.ports.tenant, id)
             .await
             .map_err(read_error)?
         {
@@ -480,7 +488,7 @@ impl<G: GitHubAppPort> AccountabilityTools for AgentDemoBackend<G> {
         } else {
             self.ports
                 .attempts
-                .by_mandate(id)
+                .by_mandate(&self.ports.tenant, id)
                 .await
                 .map_err(read_error)?
                 .into_iter()

@@ -11,7 +11,7 @@ use async_trait::async_trait;
 
 use crate::digest::ContentDigest;
 use crate::error::{StorageError, StorageResult};
-use crate::model::EvidenceDescriptor;
+use crate::model::{EvidenceDescriptor, TenantScope};
 use crate::ports::EvidenceObjectStore;
 
 /// A filesystem-backed content-addressed evidence store.
@@ -32,12 +32,18 @@ impl LocalEvidenceStore {
         Ok(Self { root })
     }
 
-    fn blob_path(&self, digest: &ContentDigest) -> PathBuf {
-        self.root.join("blobs").join(digest.to_hex())
+    fn blob_path(&self, tenant: &TenantScope, digest: &ContentDigest) -> PathBuf {
+        self.root
+            .join("blobs")
+            .join(tenant.as_str())
+            .join(digest.to_hex())
     }
 
-    fn descriptor_path(&self, digest: &ContentDigest) -> PathBuf {
-        self.root.join("descriptors").join(digest.to_hex())
+    fn descriptor_path(&self, tenant: &TenantScope, digest: &ContentDigest) -> PathBuf {
+        self.root
+            .join("descriptors")
+            .join(tenant.as_str())
+            .join(digest.to_hex())
     }
 
     /// The root directory, for backup/restore operations.
@@ -52,6 +58,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> StorageResult<()> {
     let parent = path
         .parent()
         .ok_or_else(|| StorageError::Backend("evidence path has no parent".to_string()))?;
+    std::fs::create_dir_all(parent)?;
     let file_name = path
         .file_name()
         .and_then(|n| n.to_str())
@@ -64,9 +71,9 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> StorageResult<()> {
 
 #[async_trait]
 impl EvidenceObjectStore for LocalEvidenceStore {
-    async fn put(&self, bytes: &[u8]) -> StorageResult<ContentDigest> {
+    async fn put(&self, tenant: &TenantScope, bytes: &[u8]) -> StorageResult<ContentDigest> {
         let digest = ContentDigest::of(bytes);
-        let path = self.blob_path(&digest);
+        let path = self.blob_path(tenant, &digest);
         if path.exists() {
             // Immutable and content-addressed: identical bytes already present.
             return Ok(digest);
@@ -75,8 +82,12 @@ impl EvidenceObjectStore for LocalEvidenceStore {
         Ok(digest)
     }
 
-    async fn get(&self, digest: &ContentDigest) -> StorageResult<Option<Vec<u8>>> {
-        let path = self.blob_path(digest);
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        digest: &ContentDigest,
+    ) -> StorageResult<Option<Vec<u8>>> {
+        let path = self.blob_path(tenant, digest);
         match std::fs::read(&path) {
             Ok(bytes) => {
                 let found = ContentDigest::of(&bytes);
@@ -93,13 +104,20 @@ impl EvidenceObjectStore for LocalEvidenceStore {
         }
     }
 
-    async fn put_descriptor(&self, descriptor: EvidenceDescriptor) -> StorageResult<()> {
+    async fn put_descriptor(
+        &self,
+        tenant: &TenantScope,
+        descriptor: EvidenceDescriptor,
+    ) -> StorageResult<()> {
         let line = format!(
             "{}\t{}\t{}\n",
             descriptor.digest.to_hex(),
             descriptor.media_type,
             descriptor.size_bytes
         );
-        atomic_write(&self.descriptor_path(&descriptor.digest), line.as_bytes())
+        atomic_write(
+            &self.descriptor_path(tenant, &descriptor.digest),
+            line.as_bytes(),
+        )
     }
 }

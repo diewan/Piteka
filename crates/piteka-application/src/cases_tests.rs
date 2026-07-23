@@ -42,7 +42,13 @@ fn session(user: &str) -> crate::AuthenticatedSession {
 async fn investigator_case_is_tenant_scoped_append_only_and_conflict_safe() {
     let cases = Arc::new(InMemoryInvestigatorCaseStore::default());
     let evidence = Arc::new(InMemoryEvidenceStore::default());
-    let digest = evidence.put(b"immutable evidence").await.unwrap();
+    let digest = evidence
+        .put(
+            &piteka_storage::TenantScope::new("diewan-demo").unwrap(),
+            b"immutable evidence",
+        )
+        .await
+        .unwrap();
     let use_case = CaseUseCase::new(cases, evidence, FixedClock);
     let auditor = session("auditor");
 

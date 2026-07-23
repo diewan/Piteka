@@ -4,7 +4,7 @@ use crate::{AuthenticatedSession, Clock};
 use piteka_domain::Capability;
 use piteka_storage::{
     CaseAppendOutcome, CaseEvent, ContentDigest, EvidenceObjectStore, InvestigatorCase,
-    InvestigatorCaseStore, StorageError,
+    InvestigatorCaseStore, StorageError, TenantScope,
 };
 use thiserror::Error;
 
@@ -61,7 +61,8 @@ impl<S: InvestigatorCaseStore, E: EvidenceObjectStore, C: Clock> CaseUseCase<S, 
             opened_by: session.identity().user_id().as_str().into(),
             created_at_unix_seconds: now(&self.clock),
         };
-        self.cases.create(case.clone()).await?;
+        let tenant = tenant_scope(session)?;
+        self.cases.create(&tenant, case.clone()).await?;
         Ok(case)
     }
 
@@ -70,10 +71,7 @@ impl<S: InvestigatorCaseStore, E: EvidenceObjectStore, C: Clock> CaseUseCase<S, 
         session: &AuthenticatedSession,
     ) -> Result<Vec<InvestigatorCase>, CaseUseCaseError> {
         authorize(session)?;
-        Ok(self
-            .cases
-            .list(session.identity().organization().as_str())
-            .await?)
+        Ok(self.cases.list(&tenant_scope(session)?).await?)
     }
 
     pub async fn history(
@@ -83,11 +81,11 @@ impl<S: InvestigatorCaseStore, E: EvidenceObjectStore, C: Clock> CaseUseCase<S, 
     ) -> Result<Vec<CaseEvent>, CaseUseCaseError> {
         authorize(session)?;
         nonempty("case_id", case_id)?;
-        let tenant = session.identity().organization().as_str();
-        if self.cases.get(tenant, case_id).await?.is_none() {
+        let tenant = tenant_scope(session)?;
+        if self.cases.get(&tenant, case_id).await?.is_none() {
             return Err(CaseUseCaseError::MissingCase);
         }
-        Ok(self.cases.history(tenant, case_id).await?)
+        Ok(self.cases.history(&tenant, case_id).await?)
     }
 
     pub async fn attach_evidence(
@@ -148,13 +146,13 @@ impl<S: InvestigatorCaseStore, E: EvidenceObjectStore, C: Clock> CaseUseCase<S, 
         nonempty("detail", detail)?;
         let digest =
             ContentDigest::from_hex(digest_hex).ok_or(CaseUseCaseError::InvalidEvidenceDigest)?;
-        if self.evidence.get(&digest).await?.is_none() {
+        let tenant = tenant_scope(session)?;
+        if self.evidence.get(&tenant, &digest).await?.is_none() {
             return Err(CaseUseCaseError::MissingEvidence);
         }
-        let tenant = session.identity().organization().as_str();
         let event = CaseEvent {
             event_id: event_id.into(),
-            tenant_id: tenant.into(),
+            tenant_id: tenant.as_str().into(),
             case_id: case_id.into(),
             sequence: 0,
             actor: session.identity().user_id().as_str().into(),
@@ -165,7 +163,7 @@ impl<S: InvestigatorCaseStore, E: EvidenceObjectStore, C: Clock> CaseUseCase<S, 
         };
         match self
             .cases
-            .append(tenant, case_id, expected_version, event)
+            .append(&tenant, case_id, expected_version, event)
             .await?
         {
             CaseAppendOutcome::Applied { new_version } => Ok(new_version),
@@ -175,6 +173,12 @@ impl<S: InvestigatorCaseStore, E: EvidenceObjectStore, C: Clock> CaseUseCase<S, 
             CaseAppendOutcome::Missing => Err(CaseUseCaseError::MissingCase),
         }
     }
+}
+
+fn tenant_scope(session: &AuthenticatedSession) -> Result<TenantScope, CaseUseCaseError> {
+    Ok(TenantScope::new(
+        session.identity().organization().as_str(),
+    )?)
 }
 
 fn authorize(session: &AuthenticatedSession) -> Result<(), CaseUseCaseError> {

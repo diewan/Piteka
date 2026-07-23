@@ -325,6 +325,7 @@ pub struct ReceiptProductionResult {
 /// 5. Stores the receipt and evidence nodes.
 /// 6. Records audit events.
 pub async fn produce_receipt_from_webhook<R, E, A, C>(
+    tenant: &piteka_storage::TenantScope,
     receipt_store: &R,
     evidence_store: &E,
     audit_log: &A,
@@ -342,7 +343,7 @@ where
 
     // 1. Find the execution attempt by deployment ID.
     let attempt = attempt_store
-        .by_deployment_id(event.deployment_id)
+        .by_deployment_id(tenant, event.deployment_id)
         .await?
         .ok_or_else(|| {
             ReceiptProductionError::AttemptNotFound(format!(
@@ -374,12 +375,14 @@ where
             now,
         );
         evidence_gaps.push(gap.node_id_hex.clone());
-        evidence_store.insert(gap).await?;
+        evidence_store.insert(tenant, gap).await?;
     }
 
     // 5. Store evidence nodes.
-    evidence_store.insert(observation_node.clone()).await?;
-    evidence_store.insert(claim_node.clone()).await?;
+    evidence_store
+        .insert(tenant, observation_node.clone())
+        .await?;
+    evidence_store.insert(tenant, claim_node.clone()).await?;
 
     // 6. Build and store the receipt.
     let receipt_id_hex = format!("rcpt-{}", attempt_id_hex);
@@ -396,24 +399,27 @@ where
         canonical_bytes: None,
     };
 
-    receipt_store.insert(receipt).await?;
+    receipt_store.insert(tenant, receipt).await?;
 
     // 7. Audit.
     audit_log
-        .append(piteka_storage::model::AuditEvent {
-            occurred_at_unix_seconds: now,
-            actor: None,
-            action: "receipt.produced".to_string(),
-            decision: outcome_as_str(&outcome).to_string(),
-            detail: format!(
-                "receipt={} mandate={} attempt={} github_state={} outcome={}",
-                receipt_id_hex,
-                mandate_id_hex,
-                attempt_id_hex,
-                event.state,
-                outcome_as_str(&outcome)
-            ),
-        })
+        .append(
+            tenant,
+            piteka_storage::model::AuditEvent {
+                occurred_at_unix_seconds: now,
+                actor: None,
+                action: "receipt.produced".to_string(),
+                decision: outcome_as_str(&outcome).to_string(),
+                detail: format!(
+                    "receipt={} mandate={} attempt={} github_state={} outcome={}",
+                    receipt_id_hex,
+                    mandate_id_hex,
+                    attempt_id_hex,
+                    event.state,
+                    outcome_as_str(&outcome)
+                ),
+            },
+        )
         .await?;
 
     Ok(ReceiptProductionResult {
@@ -435,6 +441,7 @@ where
     E: EvidenceNodeStore,
     A: AuditLog,
 {
+    tenant: piteka_storage::TenantScope,
     receipt_store: R,
     evidence_store: E,
     audit_log: A,
@@ -449,6 +456,7 @@ where
 {
     fn clone(&self) -> Self {
         Self {
+            tenant: self.tenant.clone(),
             receipt_store: self.receipt_store.clone(),
             evidence_store: self.evidence_store.clone(),
             audit_log: self.audit_log.clone(),
@@ -465,12 +473,14 @@ where
 {
     #[must_use]
     pub fn new(
+        tenant: piteka_storage::TenantScope,
         receipt_store: R,
         evidence_store: E,
         audit_log: A,
         attempt_store: std::sync::Arc<dyn ExecutionAttemptStore>,
     ) -> Self {
         Self {
+            tenant,
             receipt_store,
             evidence_store,
             audit_log,
@@ -506,16 +516,19 @@ where
         // until GitHub reports one terminal state.
         if !matches!(event.state.as_str(), "success" | "failure" | "error") {
             self.audit_log
-                .append(piteka_storage::model::AuditEvent {
-                    occurred_at_unix_seconds: crate::SystemClock.unix_seconds() as i64,
-                    actor: None,
-                    action: "webhook.status_non_terminal".to_string(),
-                    decision: "deferred".to_string(),
-                    detail: format!(
-                        "delivery_id={delivery_id} deployment_id={} state={}",
-                        event.deployment_id, event.state
-                    ),
-                })
+                .append(
+                    &self.tenant,
+                    piteka_storage::model::AuditEvent {
+                        occurred_at_unix_seconds: crate::SystemClock.unix_seconds() as i64,
+                        actor: None,
+                        action: "webhook.status_non_terminal".to_string(),
+                        decision: "deferred".to_string(),
+                        detail: format!(
+                            "delivery_id={delivery_id} deployment_id={} state={}",
+                            event.deployment_id, event.state
+                        ),
+                    },
+                )
                 .await
                 .map_err(WebhookError::Storage)?;
             return Ok(());
@@ -524,6 +537,7 @@ where
         let clock = crate::SystemClock;
 
         match produce_receipt_from_webhook(
+            &self.tenant,
             &self.receipt_store,
             &self.evidence_store,
             &self.audit_log,
@@ -536,49 +550,58 @@ where
             Ok(result) => {
                 let _ = self
                     .audit_log
-                    .append(piteka_storage::model::AuditEvent {
-                        occurred_at_unix_seconds: clock.unix_seconds() as i64,
-                        actor: None,
-                        action: "webhook.receipt_produced".to_string(),
-                        decision: outcome_as_str(&result.outcome).to_string(),
-                        detail: format!(
-                            "delivery_id={} receipt={} outcome={} evidence_nodes={} gaps={}",
-                            delivery_id,
-                            result.receipt_id_hex,
-                            outcome_as_str(&result.outcome),
-                            result.evidence_node_ids.len(),
-                            result.evidence_gaps.len()
-                        ),
-                    })
+                    .append(
+                        &self.tenant,
+                        piteka_storage::model::AuditEvent {
+                            occurred_at_unix_seconds: clock.unix_seconds() as i64,
+                            actor: None,
+                            action: "webhook.receipt_produced".to_string(),
+                            decision: outcome_as_str(&result.outcome).to_string(),
+                            detail: format!(
+                                "delivery_id={} receipt={} outcome={} evidence_nodes={} gaps={}",
+                                delivery_id,
+                                result.receipt_id_hex,
+                                outcome_as_str(&result.outcome),
+                                result.evidence_node_ids.len(),
+                                result.evidence_gaps.len()
+                            ),
+                        },
+                    )
                     .await;
                 Ok(())
             }
             Err(ReceiptProductionError::AttemptNotFound(_)) => {
                 let _ = self
                     .audit_log
-                    .append(piteka_storage::model::AuditEvent {
-                        occurred_at_unix_seconds: clock.unix_seconds() as i64,
-                        actor: None,
-                        action: "webhook.attempt_not_found".to_string(),
-                        decision: "skipped".to_string(),
-                        detail: format!(
-                            "delivery_id={} deployment_id={} no matching attempt",
-                            delivery_id, event.deployment_id
-                        ),
-                    })
+                    .append(
+                        &self.tenant,
+                        piteka_storage::model::AuditEvent {
+                            occurred_at_unix_seconds: clock.unix_seconds() as i64,
+                            actor: None,
+                            action: "webhook.attempt_not_found".to_string(),
+                            decision: "skipped".to_string(),
+                            detail: format!(
+                                "delivery_id={} deployment_id={} no matching attempt",
+                                delivery_id, event.deployment_id
+                            ),
+                        },
+                    )
                     .await;
                 Ok(())
             }
             Err(err) => {
                 let _ = self
                     .audit_log
-                    .append(piteka_storage::model::AuditEvent {
-                        occurred_at_unix_seconds: clock.unix_seconds() as i64,
-                        actor: None,
-                        action: "webhook.receipt_production_error".to_string(),
-                        decision: "error".to_string(),
-                        detail: format!("delivery_id={} error={}", delivery_id, err),
-                    })
+                    .append(
+                        &self.tenant,
+                        piteka_storage::model::AuditEvent {
+                            occurred_at_unix_seconds: clock.unix_seconds() as i64,
+                            actor: None,
+                            action: "webhook.receipt_production_error".to_string(),
+                            decision: "error".to_string(),
+                            detail: format!("delivery_id={} error={}", delivery_id, err),
+                        },
+                    )
                     .await;
                 Ok(())
             }

@@ -54,7 +54,8 @@ impl Clock for StepClock {
 
 /// Issues and authenticates a session for `user` at the clock's current time.
 fn session_for(user: &str, clock: &StepClock) -> AuthenticatedSession {
-    let authority = SessionAuthority::new(FoldSigner, clock.clone(), ConfiguredOrganization::demo());
+    let authority =
+        SessionAuthority::new(FoldSigner, clock.clone(), ConfiguredOrganization::demo());
     let signed = authority
         .issue(
             &UserId::new(user).unwrap(),
@@ -67,6 +68,7 @@ fn session_for(user: &str, clock: &StepClock) -> AuthenticatedSession {
 
 fn boundary(clock: &StepClock) -> DemoAuthorizationBoundary<InMemoryAuditLog, StepClock> {
     DemoAuthorizationBoundary::new(
+        piteka_storage::TenantScope::new("demo-org").unwrap(),
         InMemoryAuditLog::default(),
         clock.clone(),
         ReauthPolicy::new(300),
@@ -91,7 +93,14 @@ async fn approver_may_approve_a_standard_action_without_audit_noise() {
     assert_eq!(grant.identity_warning(), NON_PRODUCTION_IDENTITY_WARNING);
 
     // Standard grants are not audited (only denials and production grants are).
-    assert!(boundary.audit().recent(10).await.unwrap().is_empty());
+    assert!(
+        boundary
+            .audit()
+            .recent(&piteka_storage::TenantScope::new("demo-org").unwrap(), 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -115,7 +124,11 @@ async fn requester_is_denied_approval_and_the_denial_is_audited() {
         Denial::Unauthorized(Capability::ApproveAction)
     );
 
-    let events = boundary.audit().recent(10).await.unwrap();
+    let events = boundary
+        .audit()
+        .recent(&piteka_storage::TenantScope::new("demo-org").unwrap(), 10)
+        .await
+        .unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].decision, "denied");
     assert_eq!(events[0].actor.as_deref(), Some("requester"));
@@ -145,7 +158,11 @@ async fn production_approval_requires_recent_reauthentication() {
         denied.denial(),
         Denial::ReconfirmationRequired { .. }
     ));
-    let events = boundary.audit().recent(10).await.unwrap();
+    let events = boundary
+        .audit()
+        .recent(&piteka_storage::TenantScope::new("demo-org").unwrap(), 10)
+        .await
+        .unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].decision, "denied");
 }
@@ -170,7 +187,11 @@ async fn production_approval_succeeds_after_reauthentication_and_is_audited() {
     assert!(outcome.is_ok());
 
     // Production-approval grants are audited too.
-    let events = boundary.audit().recent(10).await.unwrap();
+    let events = boundary
+        .audit()
+        .recent(&piteka_storage::TenantScope::new("demo-org").unwrap(), 10)
+        .await
+        .unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].decision, "granted");
     assert_eq!(events[0].actor.as_deref(), Some("approver"));

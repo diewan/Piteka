@@ -8,32 +8,36 @@ use crate::model::{
     ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome,
     CaseAppendOutcome, CaseEvent, EvidenceDescriptor, EvidenceNodeRecord, ExecutionAttempt,
     InvestigatorCase, MandateProjection, ProtocolObjectRecord, ReceiptProjection,
-    SealConsumptionProofRecord, WebhookReceipt, WebhookRecordOutcome,
+    SealConsumptionProofRecord, TenantScope, WebhookReceipt, WebhookRecordOutcome,
 };
 
 /// Tenant-scoped, append-only investigator case repository.
 #[async_trait]
 pub trait InvestigatorCaseStore: Send + Sync {
     /// Opens a case at version zero.
-    async fn create(&self, case: InvestigatorCase) -> StorageResult<()>;
+    async fn create(&self, tenant: &TenantScope, case: InvestigatorCase) -> StorageResult<()>;
 
     /// Reads a case only inside the supplied tenant scope.
-    async fn get(&self, tenant_id: &str, case_id: &str) -> StorageResult<Option<InvestigatorCase>>;
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        case_id: &str,
+    ) -> StorageResult<Option<InvestigatorCase>>;
 
     /// Lists cases only inside the supplied tenant scope.
-    async fn list(&self, tenant_id: &str) -> StorageResult<Vec<InvestigatorCase>>;
+    async fn list(&self, tenant: &TenantScope) -> StorageResult<Vec<InvestigatorCase>>;
 
     /// Atomically appends an immutable event when `expected_version` matches.
     async fn append(
         &self,
-        tenant_id: &str,
+        tenant: &TenantScope,
         case_id: &str,
         expected_version: i64,
         event: CaseEvent,
     ) -> StorageResult<CaseAppendOutcome>;
 
     /// Returns immutable history in sequence order within tenant scope.
-    async fn history(&self, tenant_id: &str, case_id: &str) -> StorageResult<Vec<CaseEvent>>;
+    async fn history(&self, tenant: &TenantScope, case_id: &str) -> StorageResult<Vec<CaseEvent>>;
 }
 
 /// Immutable, id-addressed storage for canonical Parwana objects.
@@ -47,14 +51,18 @@ pub trait ProtocolObjectStore: Send + Sync {
     /// # Errors
     ///
     /// Returns an error on an immutability violation or a backend failure.
-    async fn put(&self, record: ProtocolObjectRecord) -> StorageResult<()>;
+    async fn put(&self, tenant: &TenantScope, record: ProtocolObjectRecord) -> StorageResult<()>;
 
     /// Fetches a canonical object by id.
     ///
     /// # Errors
     ///
     /// Returns a backend error on failure.
-    async fn get(&self, object_id_hex: &str) -> StorageResult<Option<ProtocolObjectRecord>>;
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        object_id_hex: &str,
+    ) -> StorageResult<Option<ProtocolObjectRecord>>;
 }
 
 /// Immutable, mandate-addressed storage for Single-Use Seal consumption proofs (§5.9).
@@ -72,14 +80,22 @@ pub trait SealConsumptionStore: Send + Sync {
     /// # Errors
     ///
     /// Returns an error on an immutability violation or a backend failure.
-    async fn put(&self, record: SealConsumptionProofRecord) -> StorageResult<()>;
+    async fn put(
+        &self,
+        tenant: &TenantScope,
+        record: SealConsumptionProofRecord,
+    ) -> StorageResult<()>;
 
     /// Fetches the consumption proof for a mandate, if one was recorded.
     ///
     /// # Errors
     ///
     /// Returns a backend error on failure.
-    async fn get(&self, mandate_id_hex: &str) -> StorageResult<Option<SealConsumptionProofRecord>>;
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        mandate_id_hex: &str,
+    ) -> StorageResult<Option<SealConsumptionProofRecord>>;
 }
 
 /// Live mandate projection storage with optimistic-concurrency CAS.
@@ -90,14 +106,23 @@ pub trait MandateProjectionStore: Send + Sync {
     /// # Errors
     ///
     /// Returns a backend error, including when the mandate already exists.
-    async fn insert(&self, mandate_id_hex: &str, state: &str) -> StorageResult<()>;
+    async fn insert(
+        &self,
+        tenant: &TenantScope,
+        mandate_id_hex: &str,
+        state: &str,
+    ) -> StorageResult<()>;
 
     /// Fetches the current projection.
     ///
     /// # Errors
     ///
     /// Returns a backend error on failure.
-    async fn get(&self, mandate_id_hex: &str) -> StorageResult<Option<MandateProjection>>;
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        mandate_id_hex: &str,
+    ) -> StorageResult<Option<MandateProjection>>;
 
     /// Applies a new state only if the stored version equals `expected_version`.
     ///
@@ -108,6 +133,7 @@ pub trait MandateProjectionStore: Send + Sync {
     /// Returns a backend error on failure.
     async fn compare_and_swap(
         &self,
+        tenant: &TenantScope,
         mandate_id_hex: &str,
         expected_version: i64,
         new_state: &str,
@@ -122,14 +148,22 @@ pub trait WebhookReceiptStore: Send + Sync {
     /// # Errors
     ///
     /// Returns a backend error on failure.
-    async fn record(&self, receipt: WebhookReceipt) -> StorageResult<WebhookRecordOutcome>;
+    async fn record(
+        &self,
+        tenant: &TenantScope,
+        receipt: WebhookReceipt,
+    ) -> StorageResult<WebhookRecordOutcome>;
 
     /// Fetches a previously recorded delivery.
     ///
     /// # Errors
     ///
     /// Returns a backend error on failure.
-    async fn get(&self, delivery_id: &str) -> StorageResult<Option<WebhookReceipt>>;
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        delivery_id: &str,
+    ) -> StorageResult<Option<WebhookReceipt>>;
 }
 
 /// Content-addressed storage for immutable evidence blobs.
@@ -140,7 +174,7 @@ pub trait EvidenceObjectStore: Send + Sync {
     /// # Errors
     ///
     /// Returns a backend error on failure.
-    async fn put(&self, bytes: &[u8]) -> StorageResult<ContentDigest>;
+    async fn put(&self, tenant: &TenantScope, bytes: &[u8]) -> StorageResult<ContentDigest>;
 
     /// Fetches a blob by content address, verifying the returned bytes.
     ///
@@ -148,14 +182,22 @@ pub trait EvidenceObjectStore: Send + Sync {
     ///
     /// Returns [`crate::StorageError::EvidenceDigestMismatch`] when stored bytes
     /// do not match the requested address, or a backend error on failure.
-    async fn get(&self, digest: &ContentDigest) -> StorageResult<Option<Vec<u8>>>;
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        digest: &ContentDigest,
+    ) -> StorageResult<Option<Vec<u8>>>;
 
     /// Records descriptor metadata for a stored blob.
     ///
     /// # Errors
     ///
     /// Returns a backend error on failure.
-    async fn put_descriptor(&self, descriptor: EvidenceDescriptor) -> StorageResult<()>;
+    async fn put_descriptor(
+        &self,
+        tenant: &TenantScope,
+        descriptor: EvidenceDescriptor,
+    ) -> StorageResult<()>;
 }
 
 /// Storage for structured evidence nodes (Master Plan §10.6).
@@ -168,14 +210,18 @@ pub trait EvidenceNodeStore: Send + Sync {
     /// # Errors
     ///
     /// Returns a backend error if the node id already exists.
-    async fn insert(&self, node: EvidenceNodeRecord) -> StorageResult<()>;
+    async fn insert(&self, tenant: &TenantScope, node: EvidenceNodeRecord) -> StorageResult<()>;
 
     /// Fetches an evidence node by id.
     ///
     /// # Errors
     ///
     /// Returns a backend error on failure.
-    async fn get(&self, node_id_hex: &str) -> StorageResult<Option<EvidenceNodeRecord>>;
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        node_id_hex: &str,
+    ) -> StorageResult<Option<EvidenceNodeRecord>>;
 
     /// Returns all evidence nodes for a given mandate id (by scanning node ids
     /// that start with the mandate prefix).
@@ -183,7 +229,11 @@ pub trait EvidenceNodeStore: Send + Sync {
     /// # Errors
     ///
     /// Returns a backend error on failure.
-    async fn by_mandate(&self, mandate_id_hex: &str) -> StorageResult<Vec<EvidenceNodeRecord>>;
+    async fn by_mandate(
+        &self,
+        tenant: &TenantScope,
+        mandate_id_hex: &str,
+    ) -> StorageResult<Vec<EvidenceNodeRecord>>;
 }
 
 /// Append-only audit event storage.
@@ -194,14 +244,14 @@ pub trait AuditLog: Send + Sync {
     /// # Errors
     ///
     /// Returns a backend error on failure.
-    async fn append(&self, event: AuditEvent) -> StorageResult<()>;
+    async fn append(&self, tenant: &TenantScope, event: AuditEvent) -> StorageResult<()>;
 
     /// Returns recorded events in insertion order (demo aid; bounded by caller).
     ///
     /// # Errors
     ///
     /// Returns a backend error on failure.
-    async fn recent(&self, limit: usize) -> StorageResult<Vec<AuditEvent>>;
+    async fn recent(&self, tenant: &TenantScope, limit: usize) -> StorageResult<Vec<AuditEvent>>;
 }
 
 /// Storage for action requests with optimistic-concurrency CAS on status transitions.
@@ -212,21 +262,25 @@ pub trait ActionRequestStore: Send + Sync {
     /// # Errors
     ///
     /// Returns a backend error if the request id already exists.
-    async fn insert(&self, request: ActionRequest) -> StorageResult<()>;
+    async fn insert(&self, tenant: &TenantScope, request: ActionRequest) -> StorageResult<()>;
 
     /// Fetches an action request by id.
     ///
     /// # Errors
     ///
     /// Returns a backend error on failure.
-    async fn get(&self, request_id: &str) -> StorageResult<Option<ActionRequest>>;
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        request_id: &str,
+    ) -> StorageResult<Option<ActionRequest>>;
 
     /// Returns all action requests in insertion order (bounded by caller).
     ///
     /// # Errors
     ///
     /// Returns a backend error on failure.
-    async fn list(&self) -> StorageResult<Vec<ActionRequest>>;
+    async fn list(&self, tenant: &TenantScope) -> StorageResult<Vec<ActionRequest>>;
 
     /// Applies a new status only if the stored version equals `expected_version`.
     ///
@@ -237,6 +291,7 @@ pub trait ActionRequestStore: Send + Sync {
     /// Returns a backend error on failure.
     async fn compare_and_swap(
         &self,
+        tenant: &TenantScope,
         request_id: &str,
         expected_version: i64,
         new_status: ActionRequestStatus,
@@ -251,21 +306,29 @@ pub trait ApprovalDecisionStore: Send + Sync {
     /// # Errors
     ///
     /// Returns a backend error if the decision id already exists.
-    async fn insert(&self, decision: ApprovalDecision) -> StorageResult<()>;
+    async fn insert(&self, tenant: &TenantScope, decision: ApprovalDecision) -> StorageResult<()>;
 
     /// Fetches a decision by id.
     ///
     /// # Errors
     ///
     /// Returns a backend error on failure.
-    async fn get(&self, decision_id: &str) -> StorageResult<Option<ApprovalDecision>>;
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        decision_id: &str,
+    ) -> StorageResult<Option<ApprovalDecision>>;
 
     /// Returns all decisions for a given request id.
     ///
     /// # Errors
     ///
     /// Returns a backend error on failure.
-    async fn by_request(&self, request_id: &str) -> StorageResult<Vec<ApprovalDecision>>;
+    async fn by_request(
+        &self,
+        tenant: &TenantScope,
+        request_id: &str,
+    ) -> StorageResult<Vec<ApprovalDecision>>;
 }
 
 /// Storage for execution attempts.
@@ -279,14 +342,18 @@ pub trait ExecutionAttemptStore: Send + Sync {
     /// # Errors
     ///
     /// Returns a backend error if the attempt id already exists.
-    async fn insert(&self, attempt: ExecutionAttempt) -> StorageResult<()>;
+    async fn insert(&self, tenant: &TenantScope, attempt: ExecutionAttempt) -> StorageResult<()>;
 
     /// Fetches an execution attempt by id.
     ///
     /// # Errors
     ///
     /// Returns a backend error on failure.
-    async fn get(&self, attempt_id_hex: &str) -> StorageResult<Option<ExecutionAttempt>>;
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        attempt_id_hex: &str,
+    ) -> StorageResult<Option<ExecutionAttempt>>;
 
     /// Updates the state of an existing attempt.
     ///
@@ -297,6 +364,7 @@ pub trait ExecutionAttemptStore: Send + Sync {
     /// Returns a backend error on failure.
     async fn update_state(
         &self,
+        tenant: &TenantScope,
         attempt_id_hex: &str,
         new_state: crate::model::ExecutionAttemptState,
     ) -> StorageResult<()>;
@@ -314,6 +382,7 @@ pub trait ExecutionAttemptStore: Send + Sync {
     /// Returns a backend error on failure.
     async fn update_deployment_id(
         &self,
+        tenant: &TenantScope,
         attempt_id_hex: &str,
         deployment_id: u64,
     ) -> StorageResult<()>;
@@ -323,7 +392,11 @@ pub trait ExecutionAttemptStore: Send + Sync {
     /// # Errors
     ///
     /// Returns a backend error on failure.
-    async fn by_mandate(&self, mandate_id_hex: &str) -> StorageResult<Vec<ExecutionAttempt>>;
+    async fn by_mandate(
+        &self,
+        tenant: &TenantScope,
+        mandate_id_hex: &str,
+    ) -> StorageResult<Vec<ExecutionAttempt>>;
 
     /// Finds an execution attempt by its GitHub deployment ID.
     ///
@@ -333,8 +406,11 @@ pub trait ExecutionAttemptStore: Send + Sync {
     /// # Errors
     ///
     /// Returns a backend error on failure.
-    async fn by_deployment_id(&self, deployment_id: u64)
-    -> StorageResult<Option<ExecutionAttempt>>;
+    async fn by_deployment_id(
+        &self,
+        tenant: &TenantScope,
+        deployment_id: u64,
+    ) -> StorageResult<Option<ExecutionAttempt>>;
 }
 
 /// Storage for receipt projections.
@@ -347,19 +423,27 @@ pub trait ReceiptProjectionStore: Send + Sync {
     /// # Errors
     ///
     /// Returns a backend error if the receipt id already exists.
-    async fn insert(&self, receipt: ReceiptProjection) -> StorageResult<()>;
+    async fn insert(&self, tenant: &TenantScope, receipt: ReceiptProjection) -> StorageResult<()>;
 
     /// Fetches a receipt by id.
     ///
     /// # Errors
     ///
     /// Returns a backend error on failure.
-    async fn get(&self, receipt_id_hex: &str) -> StorageResult<Option<ReceiptProjection>>;
+    async fn get(
+        &self,
+        tenant: &TenantScope,
+        receipt_id_hex: &str,
+    ) -> StorageResult<Option<ReceiptProjection>>;
 
     /// Returns all receipts for a given mandate id.
     ///
     /// # Errors
     ///
     /// Returns a backend error on failure.
-    async fn by_mandate(&self, mandate_id_hex: &str) -> StorageResult<Vec<ReceiptProjection>>;
+    async fn by_mandate(
+        &self,
+        tenant: &TenantScope,
+        mandate_id_hex: &str,
+    ) -> StorageResult<Vec<ReceiptProjection>>;
 }

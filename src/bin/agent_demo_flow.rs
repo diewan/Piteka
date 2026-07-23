@@ -34,11 +34,18 @@ async fn connect_ports(database_url: &str) -> Result<DemoPorts, Box<dyn std::err
     let pool = piteka_storage::postgres::connect(database_url).await?;
     piteka_storage::postgres::run_migrations(&pool).await?;
     Ok(DemoPorts {
+        tenant: piteka_storage::TenantScope::new("demo-tenant")?,
         requests: Arc::new(piteka_storage::memory::InMemoryActionRequestStore::default()),
         decisions: Arc::new(piteka_storage::memory::InMemoryApprovalDecisionStore::default()),
-        mandates: Arc::new(piteka_storage::postgres::PgMandateProjectionStore::new(pool.clone())),
-        attempts: Arc::new(piteka_storage::postgres::PgExecutionAttemptStore::new(pool.clone())),
-        receipts: Arc::new(piteka_storage::postgres::PgReceiptProjectionStore::new(pool.clone())),
+        mandates: Arc::new(piteka_storage::postgres::PgMandateProjectionStore::new(
+            pool.clone(),
+        )),
+        attempts: Arc::new(piteka_storage::postgres::PgExecutionAttemptStore::new(
+            pool.clone(),
+        )),
+        receipts: Arc::new(piteka_storage::postgres::PgReceiptProjectionStore::new(
+            pool.clone(),
+        )),
         audit: Arc::new(piteka_storage::postgres::PgAuditLog::new(pool)),
         clock: Arc::new(SystemClock),
     })
@@ -103,9 +110,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("proposed: {proposed}");
 
     // 2. Human operator approves out of band (issues the single-use mandate).
-    let mandate_id = human_approve(backend.ports(), "demo-approver", &plan.request_id, &intent_id)
-        .await
-        .map_err(|error| format!("human approve: {error}"))?;
+    let mandate_id = human_approve(
+        backend.ports(),
+        "demo-approver",
+        &plan.request_id,
+        &intent_id,
+    )
+    .await
+    .map_err(|error| format!("human approve: {error}"))?;
     println!("operator approved; mandate {mandate_id}");
 
     // 3. Agent learns the mandate id and executes — no human performs this step.

@@ -95,6 +95,7 @@ impl GitHubAppPort for FakeGitHub {
 
 pub fn in_memory_ports() -> DemoPorts {
     DemoPorts {
+        tenant: piteka_storage::TenantScope::new("demo-tenant").unwrap(),
         requests: Arc::new(InMemoryActionRequestStore::default()),
         decisions: Arc::new(InMemoryApprovalDecisionStore::default()),
         mandates: Arc::new(InMemoryMandateProjectionStore::default()),

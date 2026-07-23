@@ -92,8 +92,12 @@ impl DelegatedAuthorityDemo {
         let cases = Arc::new(InMemoryInvestigatorCaseStore::default());
         let bytes =
             hex::decode(&trace.canonical_evidence_hex).map_err(|error| error.to_string())?;
+        let tenant = piteka_storage::TenantScope::new(
+            ConfiguredOrganization::demo().organization().id().as_str(),
+        )
+        .map_err(|error| error.to_string())?;
         let digest = evidence
-            .put(&bytes)
+            .put(&tenant, &bytes)
             .await
             .map_err(|error| error.to_string())?;
         let use_case = CaseUseCase::new(cases, evidence, DemoClock);

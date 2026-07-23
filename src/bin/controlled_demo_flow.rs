@@ -23,6 +23,7 @@ use sha2::{Digest, Sha256};
 
 #[derive(Clone)]
 struct DemoPorts {
+    tenant: piteka_storage::TenantScope,
     requests: Arc<InMemoryActionRequestStore>,
     decisions: Arc<InMemoryApprovalDecisionStore>,
     mandates: piteka_storage::postgres::PgMandateProjectionStore,
@@ -33,10 +34,14 @@ struct DemoPorts {
 }
 
 impl DemoPorts {
-    async fn connect(database_url: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    async fn connect(
+        database_url: &str,
+        tenant: piteka_storage::TenantScope,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let pool = piteka_storage::postgres::connect(database_url).await?;
         piteka_storage::postgres::run_migrations(&pool).await?;
         Ok(Self {
+            tenant,
             requests: Arc::new(InMemoryActionRequestStore::default()),
             decisions: Arc::new(InMemoryApprovalDecisionStore::default()),
             mandates: piteka_storage::postgres::PgMandateProjectionStore::new(pool.clone()),
@@ -116,8 +121,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reservation_digest = digest("piteka-demo-reservation-v1", &[&mandate_id]);
     let correlation_key = format!("piteka:{}", &mandate_id[..24]);
 
-    let ports = DemoPorts::connect(&required("DATABASE_URL")?).await?;
-    let actions = ActionRequestUseCase::new(ports.clone());
+    let tenant = piteka_storage::TenantScope::new(
+        env::var("PITEKA_TENANT_ID").unwrap_or_else(|_| "controlled-demo".to_string()),
+    )?;
+    let ports = DemoPorts::connect(&required("DATABASE_URL")?, tenant.clone()).await?;
+    let actions = ActionRequestUseCase::new(tenant.clone(), ports.clone());
     actions
         .propose(
             &request_id,
@@ -133,9 +141,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             1,
         )
         .await?;
-    ports.mandates.insert(&mandate_id, "issued").await?;
+    ports
+        .mandates
+        .insert(&tenant, &mandate_id, "issued")
+        .await?;
 
-    let dispatch = DispatchUseCase::new(ports.clone());
+    let dispatch = DispatchUseCase::new(tenant.clone(), ports.clone());
     let reserved = dispatch
         .reserve(
             &request_id,
@@ -229,7 +240,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // authorized intent id, consume it once with the mandate's reservation-token digest,
     // and persist the proof so the exported bundle manifest can disclose it. A failure here
     // is a corroboration gap, never a reason to fail an otherwise-completed mandate.
-    let anchor = AnchorUseCase::new(LocalCsvSealAnchor::new(), ports.seals.clone());
+    let anchor = AnchorUseCase::new(
+        tenant.clone(),
+        LocalCsvSealAnchor::new(),
+        ports.seals.clone(),
+    );
     match anchor
         .record_single_use(&mandate_id, &intent_id, &reservation_digest)
         .await
@@ -243,12 +258,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mandate = ports
         .mandates
-        .get(&mandate_id)
+        .get(&tenant, &mandate_id)
         .await?
         .ok_or("mandate disappeared")?;
     let attempt = ports
         .attempts
-        .get(&dispatched.attempt_id_hex)
+        .get(&tenant, &dispatched.attempt_id_hex)
         .await?
         .ok_or("attempt disappeared")?;
     let journal = serde_json::json!({

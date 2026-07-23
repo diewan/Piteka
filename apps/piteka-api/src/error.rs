@@ -132,6 +132,9 @@ impl ApiError {
 impl From<piteka_storage::StorageError> for ApiError {
     fn from(err: piteka_storage::StorageError) -> Self {
         match err {
+            piteka_storage::StorageError::InvalidTenantScope => {
+                Self::bad_request("INVALID_TENANT_SCOPE", "The tenant scope is invalid")
+            }
             piteka_storage::StorageError::ImmutableViolation { .. } => {
                 Self::Internal("immutable violation".to_string())
             }

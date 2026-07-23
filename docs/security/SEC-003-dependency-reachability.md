@@ -41,6 +41,12 @@ that interim exposure or `HARD-02` removes it.
 - `cargo test -p piteka-github --locked`: 51 passed.
 - `cargo test --workspace`: passed; six PostgreSQL integration tests were
   ignored because no `DATABASE_URL` was supplied.
+- 2026-07-23 revalidation: both `cargo tree --target all -e features -i sqlx-mysql`
+  and the corresponding `sqlx-sqlite` command printed no selected dependency
+  tree. `cargo tree -e features -i rsa` showed only `pem` and `std` selected by
+  `piteka-github`. `cargo test --workspace` passed outside the restricted
+  sandbox so the two loopback-socket Tuppira tests could bind; all six live
+  PostgreSQL tests remained explicitly ignored without `DATABASE_URL`.
 - `cargo audit --no-fetch`: reports the retained RSA advisory above and the
   unrelated transitive `bincode` maintenance warning.
 - Independent security review approved the feature-minimization diff and

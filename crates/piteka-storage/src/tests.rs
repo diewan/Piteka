@@ -21,6 +21,10 @@ use crate::ports::{
     MandateProjectionStore, ProtocolObjectStore, ReceiptProjectionStore, WebhookReceiptStore,
 };
 
+fn scope(id: &str) -> crate::TenantScope {
+    crate::TenantScope::new(id).unwrap()
+}
+
 fn record(id: &str, bytes: &[u8]) -> ProtocolObjectRecord {
     ProtocolObjectRecord {
         kind: "action_intent".to_string(),
@@ -34,21 +38,24 @@ async fn investigator_cases_are_partitioned_by_tenant() {
     let store = InMemoryInvestigatorCaseStore::default();
     for tenant in ["tenant-a", "tenant-b"] {
         store
-            .create(InvestigatorCase {
-                tenant_id: tenant.into(),
-                case_id: "same-id".into(),
-                version: 0,
-                title: tenant.into(),
-                opened_by: "investigator".into(),
-                created_at_unix_seconds: 1,
-            })
+            .create(
+                &scope(tenant),
+                InvestigatorCase {
+                    tenant_id: tenant.into(),
+                    case_id: "same-id".into(),
+                    version: 0,
+                    title: tenant.into(),
+                    opened_by: "investigator".into(),
+                    created_at_unix_seconds: 1,
+                },
+            )
             .await
             .unwrap();
     }
-    assert_eq!(store.list("tenant-a").await.unwrap().len(), 1);
+    assert_eq!(store.list(&scope("tenant-a")).await.unwrap().len(), 1);
     assert_eq!(
         store
-            .get("tenant-a", "same-id")
+            .get(&scope("tenant-a"), "same-id")
             .await
             .unwrap()
             .unwrap()
@@ -57,33 +64,164 @@ async fn investigator_cases_are_partitioned_by_tenant() {
     );
     assert_eq!(
         store
-            .get("tenant-b", "same-id")
+            .get(&scope("tenant-b"), "same-id")
             .await
             .unwrap()
             .unwrap()
             .title,
         "tenant-b"
     );
-    assert!(store.get("tenant-c", "same-id").await.unwrap().is_none());
+    assert!(
+        store
+            .get(&scope("tenant-c"), "same-id")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn tenant_scope_rejects_unscoped_and_path_like_values() {
+    for invalid in ["", " ", "../tenant", "tenant/child", "tenant\\child"] {
+        assert!(
+            crate::TenantScope::new(invalid).is_err(),
+            "accepted {invalid:?}"
+        );
+    }
+    assert!(crate::TenantScope::new("org-1:prod.eu").is_ok());
+}
+
+#[tokio::test]
+async fn identical_ids_and_mutations_are_isolated_between_tenants() {
+    let a = scope("tenant-a");
+    let b = scope("tenant-b");
+    let outsider = scope("tenant-c");
+
+    let objects = InMemoryProtocolObjectStore::default();
+    objects.put(&a, record("same-id", b"a")).await.unwrap();
+    objects.put(&b, record("same-id", b"b")).await.unwrap();
+    assert_eq!(
+        objects.get(&a, "same-id").await.unwrap().unwrap().bytes,
+        b"a"
+    );
+    assert_eq!(
+        objects.get(&b, "same-id").await.unwrap().unwrap().bytes,
+        b"b"
+    );
+    assert!(objects.get(&outsider, "same-id").await.unwrap().is_none());
+
+    let mandates = InMemoryMandateProjectionStore::default();
+    mandates.insert(&a, "same-id", "issued").await.unwrap();
+    mandates.insert(&b, "same-id", "issued").await.unwrap();
+    assert_eq!(
+        mandates
+            .compare_and_swap(&a, "same-id", 1, "consumed")
+            .await
+            .unwrap(),
+        CasOutcome::Applied { new_version: 2 }
+    );
+    assert_eq!(
+        mandates.get(&a, "same-id").await.unwrap().unwrap().state,
+        "consumed"
+    );
+    assert_eq!(
+        mandates.get(&b, "same-id").await.unwrap().unwrap().state,
+        "issued"
+    );
+    assert_eq!(
+        mandates
+            .compare_and_swap(&outsider, "same-id", 1, "consumed")
+            .await
+            .unwrap(),
+        CasOutcome::Missing
+    );
+
+    let audit = InMemoryAuditLog::default();
+    for (tenant, decision) in [(&a, "a"), (&b, "b")] {
+        audit
+            .append(
+                tenant,
+                AuditEvent {
+                    occurred_at_unix_seconds: 1,
+                    actor: None,
+                    action: "test".into(),
+                    decision: decision.into(),
+                    detail: String::new(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(audit.recent(&a, 10).await.unwrap()[0].decision, "a");
+    assert_eq!(audit.recent(&b, 10).await.unwrap()[0].decision, "b");
+    assert!(audit.recent(&outsider, 10).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn filesystem_evidence_paths_are_tenant_partitioned() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = LocalEvidenceStore::open(dir.path()).unwrap();
+    let a = scope("tenant-a");
+    let b = scope("tenant-b");
+    let digest = store.put(&a, b"shared bytes").await.unwrap();
+
+    assert_eq!(
+        store.get(&a, &digest).await.unwrap().unwrap(),
+        b"shared bytes"
+    );
+    assert!(store.get(&b, &digest).await.unwrap().is_none());
+    assert!(
+        dir.path()
+            .join("blobs")
+            .join("tenant-a")
+            .join(digest.to_hex())
+            .is_file()
+    );
+    assert!(
+        !dir.path()
+            .join("blobs")
+            .join("tenant-b")
+            .join(digest.to_hex())
+            .exists()
+    );
 }
 
 #[tokio::test]
 async fn protocol_objects_are_immutable_but_idempotent() {
     let store = InMemoryProtocolObjectStore::default();
-    store.put(record("aa", b"canonical-bytes")).await.unwrap();
+    store
+        .put(&scope("test-tenant"), record("aa", b"canonical-bytes"))
+        .await
+        .unwrap();
 
     // Identical bytes: idempotent.
-    store.put(record("aa", b"canonical-bytes")).await.unwrap();
+    store
+        .put(&scope("test-tenant"), record("aa", b"canonical-bytes"))
+        .await
+        .unwrap();
     assert_eq!(
-        store.get("aa").await.unwrap().unwrap().bytes,
+        store
+            .get(&scope("test-tenant"), "aa")
+            .await
+            .unwrap()
+            .unwrap()
+            .bytes,
         b"canonical-bytes".to_vec()
     );
 
     // Different bytes for the same id: rejected, original preserved.
-    let err = store.put(record("aa", b"tampered")).await.unwrap_err();
+    let err = store
+        .put(&scope("test-tenant"), record("aa", b"tampered"))
+        .await
+        .unwrap_err();
     assert!(matches!(err, StorageError::ImmutableViolation { .. }));
     assert_eq!(
-        store.get("aa").await.unwrap().unwrap().bytes,
+        store
+            .get(&scope("test-tenant"), "aa")
+            .await
+            .unwrap()
+            .unwrap()
+            .bytes,
         b"canonical-bytes".to_vec()
     );
 }
@@ -91,24 +229,48 @@ async fn protocol_objects_are_immutable_but_idempotent() {
 #[tokio::test]
 async fn mandate_cas_admits_exactly_one_winner() {
     let store = InMemoryMandateProjectionStore::default();
-    store.insert("m1", "reserved").await.unwrap();
-    let start = store.get("m1").await.unwrap().unwrap();
+    store
+        .insert(&scope("test-tenant"), "m1", "reserved")
+        .await
+        .unwrap();
+    let start = store
+        .get(&scope("test-tenant"), "m1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(start.version, 1);
 
     // Two racers read version 1; only the first CAS applies.
-    let first = store.compare_and_swap("m1", 1, "consumed").await.unwrap();
-    let second = store.compare_and_swap("m1", 1, "abandoned").await.unwrap();
+    let first = store
+        .compare_and_swap(&scope("test-tenant"), "m1", 1, "consumed")
+        .await
+        .unwrap();
+    let second = store
+        .compare_and_swap(&scope("test-tenant"), "m1", 1, "abandoned")
+        .await
+        .unwrap();
 
     assert_eq!(first, CasOutcome::Applied { new_version: 2 });
     assert_eq!(second, CasOutcome::Conflict { current_version: 2 });
-    assert_eq!(store.get("m1").await.unwrap().unwrap().state, "consumed");
+    assert_eq!(
+        store
+            .get(&scope("test-tenant"), "m1")
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        "consumed"
+    );
 }
 
 #[tokio::test]
 async fn mandate_cas_reports_missing() {
     let store = InMemoryMandateProjectionStore::default();
     assert_eq!(
-        store.compare_and_swap("absent", 1, "x").await.unwrap(),
+        store
+            .compare_and_swap(&scope("test-tenant"), "absent", 1, "x")
+            .await
+            .unwrap(),
         CasOutcome::Missing
     );
 }
@@ -123,32 +285,44 @@ async fn webhook_deliveries_are_unique_and_idempotent() {
         received_at_unix_seconds: 1_700_000_000,
     };
     assert_eq!(
-        store.record(receipt.clone()).await.unwrap(),
+        store
+            .record(&scope("test-tenant"), receipt.clone())
+            .await
+            .unwrap(),
         WebhookRecordOutcome::Recorded
     );
     // A replayed delivery id is a no-op duplicate, not a second record.
     assert_eq!(
-        store.record(receipt).await.unwrap(),
+        store.record(&scope("test-tenant"), receipt).await.unwrap(),
         WebhookRecordOutcome::Duplicate
     );
-    assert!(store.get("delivery-123").await.unwrap().is_some());
+    assert!(
+        store
+            .get(&scope("test-tenant"), "delivery-123")
+            .await
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[tokio::test]
 async fn audit_log_is_append_only_and_ordered() {
     let log = InMemoryAuditLog::default();
     for decision in ["granted", "denied"] {
-        log.append(AuditEvent {
-            occurred_at_unix_seconds: 1,
-            actor: Some("requester".to_string()),
-            action: "approve".to_string(),
-            decision: decision.to_string(),
-            detail: String::new(),
-        })
+        log.append(
+            &scope("test-tenant"),
+            AuditEvent {
+                occurred_at_unix_seconds: 1,
+                actor: Some("requester".to_string()),
+                action: "approve".to_string(),
+                decision: decision.to_string(),
+                detail: String::new(),
+            },
+        )
         .await
         .unwrap();
     }
-    let recent = log.recent(10).await.unwrap();
+    let recent = log.recent(&scope("test-tenant"), 10).await.unwrap();
     assert_eq!(recent.len(), 2);
     assert_eq!(recent[0].decision, "granted");
     assert_eq!(recent[1].decision, "denied");
@@ -159,29 +333,45 @@ async fn local_evidence_store_is_content_addressed_and_verifies_reads() {
     let dir = tempfile::tempdir().unwrap();
     let store = LocalEvidenceStore::open(dir.path()).unwrap();
 
-    let digest = store.put(b"evidence-bytes").await.unwrap();
+    let digest = store
+        .put(&scope("test-tenant"), b"evidence-bytes")
+        .await
+        .unwrap();
     assert_eq!(digest, ContentDigest::of(b"evidence-bytes"));
     // Idempotent re-put yields the same address.
-    assert_eq!(store.put(b"evidence-bytes").await.unwrap(), digest);
+    assert_eq!(
+        store
+            .put(&scope("test-tenant"), b"evidence-bytes")
+            .await
+            .unwrap(),
+        digest
+    );
 
     assert_eq!(
-        store.get(&digest).await.unwrap().unwrap(),
+        store
+            .get(&scope("test-tenant"), &digest)
+            .await
+            .unwrap()
+            .unwrap(),
         b"evidence-bytes".to_vec()
     );
     assert!(
         store
-            .get(&ContentDigest::of(b"never-stored"))
+            .get(&scope("test-tenant"), &ContentDigest::of(b"never-stored"))
             .await
             .unwrap()
             .is_none()
     );
 
     store
-        .put_descriptor(EvidenceDescriptor {
-            digest,
-            media_type: "application/json".to_string(),
-            size_bytes: 14,
-        })
+        .put_descriptor(
+            &scope("test-tenant"),
+            EvidenceDescriptor {
+                digest,
+                media_type: "application/json".to_string(),
+                size_bytes: 14,
+            },
+        )
         .await
         .unwrap();
 }
@@ -190,13 +380,20 @@ async fn local_evidence_store_is_content_addressed_and_verifies_reads() {
 async fn local_evidence_store_detects_corruption_on_read() {
     let dir = tempfile::tempdir().unwrap();
     let store = LocalEvidenceStore::open(dir.path()).unwrap();
-    let digest = store.put(b"good-bytes").await.unwrap();
+    let digest = store
+        .put(&scope("test-tenant"), b"good-bytes")
+        .await
+        .unwrap();
 
     // Corrupt the blob on disk under its content address.
-    let blob = dir.path().join("blobs").join(digest.to_hex());
+    let blob = dir
+        .path()
+        .join("blobs")
+        .join(scope("test-tenant").as_str())
+        .join(digest.to_hex());
     std::fs::write(&blob, b"corrupted").unwrap();
 
-    let err = store.get(&digest).await.unwrap_err();
+    let err = store.get(&scope("test-tenant"), &digest).await.unwrap_err();
     assert!(matches!(err, StorageError::EvidenceDigestMismatch { .. }));
 }
 
@@ -206,8 +403,14 @@ async fn local_evidence_store_survives_backup_and_restore() {
     // ignored pg_dump/pg_restore integration test).
     let source = tempfile::tempdir().unwrap();
     let store = LocalEvidenceStore::open(source.path()).unwrap();
-    let a = store.put(b"artifact-a").await.unwrap();
-    let b = store.put(b"artifact-b").await.unwrap();
+    let a = store
+        .put(&scope("test-tenant"), b"artifact-a")
+        .await
+        .unwrap();
+    let b = store
+        .put(&scope("test-tenant"), b"artifact-b")
+        .await
+        .unwrap();
 
     // "Back up" by copying the tree, then restore into a fresh location.
     let restore = tempfile::tempdir().unwrap();
@@ -215,11 +418,19 @@ async fn local_evidence_store_survives_backup_and_restore() {
     let restored = LocalEvidenceStore::open(restore.path()).unwrap();
 
     assert_eq!(
-        restored.get(&a).await.unwrap().unwrap(),
+        restored
+            .get(&scope("test-tenant"), &a)
+            .await
+            .unwrap()
+            .unwrap(),
         b"artifact-a".to_vec()
     );
     assert_eq!(
-        restored.get(&b).await.unwrap().unwrap(),
+        restored
+            .get(&scope("test-tenant"), &b)
+            .await
+            .unwrap()
+            .unwrap(),
         b"artifact-b".to_vec()
     );
 }
@@ -261,35 +472,77 @@ fn make_attempt(id: &str, mandate: &str) -> ExecutionAttempt {
 async fn execution_attempts_are_append_only() {
     let store = InMemoryExecutionAttemptStore::default();
 
-    store.insert(make_attempt("att-1", "m1")).await.unwrap();
-    store.insert(make_attempt("att-2", "m1")).await.unwrap();
+    store
+        .insert(&scope("test-tenant"), make_attempt("att-1", "m1"))
+        .await
+        .unwrap();
+    store
+        .insert(&scope("test-tenant"), make_attempt("att-2", "m1"))
+        .await
+        .unwrap();
 
     // Duplicate id is rejected.
-    let err = store.insert(make_attempt("att-1", "m1")).await.unwrap_err();
+    let err = store
+        .insert(&scope("test-tenant"), make_attempt("att-1", "m1"))
+        .await
+        .unwrap_err();
     assert!(err.to_string().contains("already exists"));
 
     // Both attempts are retrievable.
-    assert!(store.get("att-1").await.unwrap().is_some());
-    assert!(store.get("att-2").await.unwrap().is_some());
-    assert!(store.get("att-missing").await.unwrap().is_none());
+    assert!(
+        store
+            .get(&scope("test-tenant"), "att-1")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        store
+            .get(&scope("test-tenant"), "att-2")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        store
+            .get(&scope("test-tenant"), "att-missing")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
 async fn execution_attempt_state_transitions_are_recorded() {
     let store = InMemoryExecutionAttemptStore::default();
-    store.insert(make_attempt("att-1", "m1")).await.unwrap();
-
     store
-        .update_state("att-1", ExecutionAttemptState::Dispatching)
+        .insert(&scope("test-tenant"), make_attempt("att-1", "m1"))
         .await
         .unwrap();
 
-    let attempt = store.get("att-1").await.unwrap().unwrap();
+    store
+        .update_state(
+            &scope("test-tenant"),
+            "att-1",
+            ExecutionAttemptState::Dispatching,
+        )
+        .await
+        .unwrap();
+
+    let attempt = store
+        .get(&scope("test-tenant"), "att-1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(attempt.state, ExecutionAttemptState::Dispatching);
 
     // Updating a non-existent attempt fails.
     let err = store
-        .update_state("att-missing", ExecutionAttemptState::Accepted)
+        .update_state(
+            &scope("test-tenant"),
+            "att-missing",
+            ExecutionAttemptState::Accepted,
+        )
         .await
         .unwrap_err();
     assert!(err.to_string().contains("not found"));
@@ -298,17 +551,26 @@ async fn execution_attempt_state_transitions_are_recorded() {
 #[tokio::test]
 async fn execution_attempts_queryable_by_mandate() {
     let store = InMemoryExecutionAttemptStore::default();
-    store.insert(make_attempt("att-1", "m1")).await.unwrap();
-    store.insert(make_attempt("att-2", "m1")).await.unwrap();
-    store.insert(make_attempt("att-3", "m2")).await.unwrap();
+    store
+        .insert(&scope("test-tenant"), make_attempt("att-1", "m1"))
+        .await
+        .unwrap();
+    store
+        .insert(&scope("test-tenant"), make_attempt("att-2", "m1"))
+        .await
+        .unwrap();
+    store
+        .insert(&scope("test-tenant"), make_attempt("att-3", "m2"))
+        .await
+        .unwrap();
 
-    let m1_attempts = store.by_mandate("m1").await.unwrap();
+    let m1_attempts = store.by_mandate(&scope("test-tenant"), "m1").await.unwrap();
     assert_eq!(m1_attempts.len(), 2);
 
-    let m2_attempts = store.by_mandate("m2").await.unwrap();
+    let m2_attempts = store.by_mandate(&scope("test-tenant"), "m2").await.unwrap();
     assert_eq!(m2_attempts.len(), 1);
 
-    let empty = store.by_mandate("m3").await.unwrap();
+    let empty = store.by_mandate(&scope("test-tenant"), "m3").await.unwrap();
     assert!(empty.is_empty());
 }
 
@@ -318,16 +580,28 @@ async fn execution_attempts_queryable_by_deployment_id() {
 
     let mut attempt1 = make_attempt("att-1", "m1");
     attempt1.github_deployment_id = Some(12345);
-    store.insert(attempt1).await.unwrap();
+    store.insert(&scope("test-tenant"), attempt1).await.unwrap();
 
-    store.insert(make_attempt("att-2", "m1")).await.unwrap();
-    store.insert(make_attempt("att-3", "m2")).await.unwrap();
+    store
+        .insert(&scope("test-tenant"), make_attempt("att-2", "m1"))
+        .await
+        .unwrap();
+    store
+        .insert(&scope("test-tenant"), make_attempt("att-3", "m2"))
+        .await
+        .unwrap();
 
-    let found = store.by_deployment_id(12345).await.unwrap();
+    let found = store
+        .by_deployment_id(&scope("test-tenant"), 12345)
+        .await
+        .unwrap();
     assert!(found.is_some());
     assert_eq!(found.unwrap().attempt_id_hex, "att-1");
 
-    let not_found = store.by_deployment_id(99999).await.unwrap();
+    let not_found = store
+        .by_deployment_id(&scope("test-tenant"), 99999)
+        .await
+        .unwrap();
     assert!(not_found.is_none());
 }
 
@@ -336,35 +610,41 @@ async fn receipt_projections_are_append_only() {
     let store = InMemoryReceiptProjectionStore::default();
 
     store
-        .insert(ReceiptProjection {
-            receipt_id_hex: "rcpt-1".to_string(),
-            mandate_id_hex: "m1".to_string(),
-            intent_id_hex: "intent-abc123".to_string(),
-            attempt_id_hex: "att-1".to_string(),
-            outcome: ReceiptOutcome::Succeeded,
-            created_at_unix_seconds: 2_000,
-            dispatch_evidence_refs: vec![],
-            target_evidence_refs: vec![],
-            evidence_gaps: vec![],
-            canonical_bytes: None,
-        })
+        .insert(
+            &scope("test-tenant"),
+            ReceiptProjection {
+                receipt_id_hex: "rcpt-1".to_string(),
+                mandate_id_hex: "m1".to_string(),
+                intent_id_hex: "intent-abc123".to_string(),
+                attempt_id_hex: "att-1".to_string(),
+                outcome: ReceiptOutcome::Succeeded,
+                created_at_unix_seconds: 2_000,
+                dispatch_evidence_refs: vec![],
+                target_evidence_refs: vec![],
+                evidence_gaps: vec![],
+                canonical_bytes: None,
+            },
+        )
         .await
         .unwrap();
 
     // Duplicate id is rejected.
     let err = store
-        .insert(ReceiptProjection {
-            receipt_id_hex: "rcpt-1".to_string(),
-            mandate_id_hex: "m1".to_string(),
-            intent_id_hex: "intent-abc123".to_string(),
-            attempt_id_hex: "att-1".to_string(),
-            outcome: ReceiptOutcome::Failed,
-            created_at_unix_seconds: 2_001,
-            dispatch_evidence_refs: vec![],
-            target_evidence_refs: vec![],
-            evidence_gaps: vec![],
-            canonical_bytes: None,
-        })
+        .insert(
+            &scope("test-tenant"),
+            ReceiptProjection {
+                receipt_id_hex: "rcpt-1".to_string(),
+                mandate_id_hex: "m1".to_string(),
+                intent_id_hex: "intent-abc123".to_string(),
+                attempt_id_hex: "att-1".to_string(),
+                outcome: ReceiptOutcome::Failed,
+                created_at_unix_seconds: 2_001,
+                dispatch_evidence_refs: vec![],
+                target_evidence_refs: vec![],
+                evidence_gaps: vec![],
+                canonical_bytes: None,
+            },
+        )
         .await
         .unwrap_err();
     assert!(err.to_string().contains("already exists"));
@@ -375,38 +655,44 @@ async fn receipts_queryable_by_mandate() {
     let store = InMemoryReceiptProjectionStore::default();
 
     store
-        .insert(ReceiptProjection {
-            receipt_id_hex: "rcpt-1".to_string(),
-            mandate_id_hex: "m1".to_string(),
-            intent_id_hex: "intent-abc123".to_string(),
-            attempt_id_hex: "att-1".to_string(),
-            outcome: ReceiptOutcome::Succeeded,
-            created_at_unix_seconds: 2_000,
-            dispatch_evidence_refs: vec![],
-            target_evidence_refs: vec![],
-            evidence_gaps: vec![],
-            canonical_bytes: None,
-        })
+        .insert(
+            &scope("test-tenant"),
+            ReceiptProjection {
+                receipt_id_hex: "rcpt-1".to_string(),
+                mandate_id_hex: "m1".to_string(),
+                intent_id_hex: "intent-abc123".to_string(),
+                attempt_id_hex: "att-1".to_string(),
+                outcome: ReceiptOutcome::Succeeded,
+                created_at_unix_seconds: 2_000,
+                dispatch_evidence_refs: vec![],
+                target_evidence_refs: vec![],
+                evidence_gaps: vec![],
+                canonical_bytes: None,
+            },
+        )
         .await
         .unwrap();
 
     store
-        .insert(ReceiptProjection {
-            receipt_id_hex: "rcpt-2".to_string(),
-            mandate_id_hex: "m1".to_string(),
-            intent_id_hex: "intent-abc123".to_string(),
-            attempt_id_hex: "att-2".to_string(),
-            outcome: ReceiptOutcome::Unknown,
-            created_at_unix_seconds: 2_001,
-            dispatch_evidence_refs: vec![],
-            target_evidence_refs: vec![],
-            evidence_gaps: vec![],
-            canonical_bytes: None,
-        })
+        .insert(
+            &scope("test-tenant"),
+            ReceiptProjection {
+                receipt_id_hex: "rcpt-2".to_string(),
+                mandate_id_hex: "m1".to_string(),
+                intent_id_hex: "intent-abc123".to_string(),
+                attempt_id_hex: "att-2".to_string(),
+                outcome: ReceiptOutcome::Unknown,
+                created_at_unix_seconds: 2_001,
+                dispatch_evidence_refs: vec![],
+                target_evidence_refs: vec![],
+                evidence_gaps: vec![],
+                canonical_bytes: None,
+            },
+        )
         .await
         .unwrap();
 
-    let receipts = store.by_mandate("m1").await.unwrap();
+    let receipts = store.by_mandate(&scope("test-tenant"), "m1").await.unwrap();
     assert_eq!(receipts.len(), 2);
     assert_eq!(receipts[0].outcome, ReceiptOutcome::Succeeded);
     assert_eq!(receipts[1].outcome, ReceiptOutcome::Unknown);

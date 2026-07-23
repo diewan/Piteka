@@ -13,7 +13,7 @@
 //! rather than failing.
 
 use piteka_ports::anchor::{AnchorError, AnchorPort, Digest32};
-use piteka_storage::{SealConsumptionProofRecord, SealConsumptionStore, StorageError};
+use piteka_storage::{SealConsumptionProofRecord, SealConsumptionStore, StorageError, TenantScope};
 use sha2::{Digest, Sha256};
 
 /// Domain tag separating the seal-id derivation from any other hash of a mandate id.
@@ -44,14 +44,19 @@ impl std::error::Error for AnchorUseCaseError {}
 
 /// Records independent single-use anchors, off the dispatch hot path.
 pub struct AnchorUseCase<A, S> {
+    tenant: TenantScope,
     anchor: A,
     store: S,
 }
 
 impl<A: AnchorPort, S: SealConsumptionStore> AnchorUseCase<A, S> {
     /// Builds a use case over an anchor backing and a consumption-proof store.
-    pub const fn new(anchor: A, store: S) -> Self {
-        Self { anchor, store }
+    pub const fn new(tenant: TenantScope, anchor: A, store: S) -> Self {
+        Self {
+            tenant,
+            anchor,
+            store,
+        }
     }
 
     /// Records a mandate's independent single use and returns the persisted proof.
@@ -92,7 +97,7 @@ impl<A: AnchorPort, S: SealConsumptionStore> AnchorUseCase<A, S> {
             anchor_backend: proof.backend,
         };
         self.store
-            .put(record.clone())
+            .put(&self.tenant, record.clone())
             .await
             .map_err(AnchorUseCaseError::Storage)?;
         Ok(record)
@@ -188,6 +193,7 @@ mod tests {
         let intent_id = "a1".repeat(32);
         let reservation_token = "b2".repeat(32);
         let use_case = AnchorUseCase::new(
+            TenantScope::new("test-tenant").unwrap(),
             MockAnchor::default(),
             InMemorySealConsumptionStore::default(),
         );
@@ -210,6 +216,7 @@ mod tests {
         let intent_id = "a1".repeat(32);
         let reservation_token = "b2".repeat(32);
         let use_case = AnchorUseCase::new(
+            TenantScope::new("test-tenant").unwrap(),
             MockAnchor::default(),
             InMemorySealConsumptionStore::default(),
         );
@@ -228,6 +235,7 @@ mod tests {
     #[tokio::test]
     async fn a_malformed_input_digest_fails_closed() {
         let use_case = AnchorUseCase::new(
+            TenantScope::new("test-tenant").unwrap(),
             MockAnchor::default(),
             InMemorySealConsumptionStore::default(),
         );

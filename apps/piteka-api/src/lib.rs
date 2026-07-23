@@ -97,6 +97,7 @@ async fn require_tenant(req: Request, next: Next) -> axum::response::Response {
 /// A minimal in-memory port implementation for testing.
 #[derive(Clone)]
 pub struct TestPorts {
+    pub tenant: piteka_storage::TenantScope,
     pub request_store: std::sync::Arc<piteka_storage::memory::InMemoryActionRequestStore>,
     pub decision_store: std::sync::Arc<piteka_storage::memory::InMemoryApprovalDecisionStore>,
     pub audit_log: std::sync::Arc<piteka_storage::memory::InMemoryAuditLog>,
@@ -116,6 +117,7 @@ pub struct TestPorts {
 impl TestPorts {
     pub fn new() -> Self {
         Self {
+            tenant: piteka_storage::TenantScope::new("test-tenant").expect("valid static tenant"),
             request_store: std::sync::Arc::new(
                 piteka_storage::memory::InMemoryActionRequestStore::default(),
             ),
@@ -151,7 +153,7 @@ impl TestPorts {
     }
 
     pub fn use_case(&self) -> ActionRequestUseCase<TestPorts> {
-        ActionRequestUseCase::new(self.clone())
+        ActionRequestUseCase::new(self.tenant.clone(), self.clone())
     }
 
     /// Returns a webhook ingestion use case configured with these test ports.
@@ -167,7 +169,7 @@ impl TestPorts {
             self.webhook_receipt_store.clone(),
             self.audit_log.clone(),
         );
-        piteka_application::WebhookIngestionUseCase::new(ports)
+        piteka_application::WebhookIngestionUseCase::new(self.tenant.clone(), ports)
     }
 
     /// Returns HTTP state for the GitHub webhook endpoint.
@@ -220,6 +222,7 @@ impl Default for TestPorts {
 /// cheap clone over a shared connection pool.
 #[derive(Clone)]
 pub struct LiveActionRequestPorts {
+    tenant: piteka_storage::TenantScope,
     request_store: piteka_storage::postgres::PgActionRequestStore,
     decision_store: piteka_storage::postgres::PgApprovalDecisionStore,
     audit_log: piteka_storage::postgres::PgAuditLog,
@@ -234,10 +237,14 @@ impl LiveActionRequestPorts {
     ///
     /// Returns a storage error if the pool cannot be established or migrations
     /// fail.
-    pub async fn connect(database_url: &str) -> Result<Self, piteka_storage::StorageError> {
+    pub async fn connect(
+        database_url: &str,
+        tenant: piteka_storage::TenantScope,
+    ) -> Result<Self, piteka_storage::StorageError> {
         let pool = piteka_storage::postgres::connect(database_url).await?;
         piteka_storage::postgres::run_migrations(&pool).await?;
         Ok(Self {
+            tenant,
             request_store: piteka_storage::postgres::PgActionRequestStore::new(pool.clone()),
             decision_store: piteka_storage::postgres::PgApprovalDecisionStore::new(pool.clone()),
             audit_log: piteka_storage::postgres::PgAuditLog::new(pool),
@@ -248,7 +255,7 @@ impl LiveActionRequestPorts {
     /// Returns an action-request use case configured with these live ports.
     #[must_use]
     pub fn use_case(&self) -> ActionRequestUseCase<LiveActionRequestPorts> {
-        ActionRequestUseCase::new(self.clone())
+        ActionRequestUseCase::new(self.tenant.clone(), self.clone())
     }
 }
 

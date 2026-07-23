@@ -138,6 +138,7 @@ where
     W: WebhookReceiptStore,
     A: AuditLog,
 {
+    tenant: piteka_storage::TenantScope,
     ports: WebhookIngestionPorts<P, W, A>,
 }
 
@@ -147,8 +148,8 @@ where
     W: WebhookReceiptStore,
     A: AuditLog,
 {
-    pub fn new(ports: WebhookIngestionPorts<P, W, A>) -> Self {
-        Self { ports }
+    pub fn new(tenant: piteka_storage::TenantScope, ports: WebhookIngestionPorts<P, W, A>) -> Self {
+        Self { tenant, ports }
     }
 
     /// Ingests a webhook payload.
@@ -193,7 +194,12 @@ where
         let raw_digest = ContentDigest::of(&payload.body);
 
         // Step 2: Check for replay via delivery ID deduplication.
-        match self.ports.receipt_store.get(&payload.delivery_id).await {
+        match self
+            .ports
+            .receipt_store
+            .get(&self.tenant, &payload.delivery_id)
+            .await
+        {
             Ok(Some(_existing)) => {
                 // Duplicate delivery — idempotent no-op.
                 return Ok(IngestionOutcome::Duplicate);
@@ -214,7 +220,7 @@ where
             received_at_unix_seconds: clock.unix_seconds() as i64,
         };
 
-        match self.ports.receipt_store.record(receipt).await {
+        match self.ports.receipt_store.record(&self.tenant, receipt).await {
             Ok(piteka_storage::model::WebhookRecordOutcome::Duplicate) => {
                 // Race condition: another request recorded this delivery first.
                 return Ok(IngestionOutcome::Duplicate);
@@ -243,16 +249,19 @@ where
 
         self.ports
             .audit_log
-            .append(piteka_storage::model::AuditEvent {
-                occurred_at_unix_seconds: clock.unix_seconds() as i64,
-                actor: None,
-                action: audit_action.to_string(),
-                decision: "accepted".to_string(),
-                detail: format!(
-                    "delivery_id={} event_type={} out_of_order={}",
-                    payload.delivery_id, payload.event_type, out_of_order
-                ),
-            })
+            .append(
+                &self.tenant,
+                piteka_storage::model::AuditEvent {
+                    occurred_at_unix_seconds: clock.unix_seconds() as i64,
+                    actor: None,
+                    action: audit_action.to_string(),
+                    decision: "accepted".to_string(),
+                    detail: format!(
+                        "delivery_id={} event_type={} out_of_order={}",
+                        payload.delivery_id, payload.event_type, out_of_order
+                    ),
+                },
+            )
             .await
             .map_err(WebhookError::Storage)?;
 
@@ -289,29 +298,38 @@ where
                 let _ = self
                     .ports
                     .audit_log
-                    .append(piteka_storage::model::AuditEvent {
-                        occurred_at_unix_seconds: clock.unix_seconds() as i64,
-                        actor: None,
-                        action: "webhook.processed".to_string(),
-                        decision: "success".to_string(),
-                        detail: format!("delivery_id={} event_type={}", delivery_id, event_type),
-                    })
+                    .append(
+                        &self.tenant,
+                        piteka_storage::model::AuditEvent {
+                            occurred_at_unix_seconds: clock.unix_seconds() as i64,
+                            actor: None,
+                            action: "webhook.processed".to_string(),
+                            decision: "success".to_string(),
+                            detail: format!(
+                                "delivery_id={} event_type={}",
+                                delivery_id, event_type
+                            ),
+                        },
+                    )
                     .await;
             }
             Err(err) => {
                 let _ = self
                     .ports
                     .audit_log
-                    .append(piteka_storage::model::AuditEvent {
-                        occurred_at_unix_seconds: clock.unix_seconds() as i64,
-                        actor: None,
-                        action: "webhook.process_error".to_string(),
-                        decision: "error".to_string(),
-                        detail: format!(
-                            "delivery_id={} event_type={} error={}",
-                            delivery_id, event_type, err
-                        ),
-                    })
+                    .append(
+                        &self.tenant,
+                        piteka_storage::model::AuditEvent {
+                            occurred_at_unix_seconds: clock.unix_seconds() as i64,
+                            actor: None,
+                            action: "webhook.process_error".to_string(),
+                            decision: "error".to_string(),
+                            detail: format!(
+                                "delivery_id={} event_type={} error={}",
+                                delivery_id, event_type, err
+                            ),
+                        },
+                    )
                     .await;
             }
         }

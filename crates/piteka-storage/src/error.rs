@@ -22,6 +22,8 @@ pub enum StorageError {
     },
     /// A required field was empty.
     EmptyField(&'static str),
+    /// A tenant scope was empty, oversized, or contained delimiter/control characters.
+    InvalidTenantScope,
     /// A backend (I/O or database) failure with a human-readable message.
     Backend(String),
 }
@@ -40,6 +42,7 @@ impl core::fmt::Display for StorageError {
                 found.to_hex()
             ),
             Self::EmptyField(field) => write!(f, "storage field `{field}` must not be empty"),
+            Self::InvalidTenantScope => write!(f, "tenant scope is invalid"),
             Self::Backend(message) => write!(f, "storage backend error: {message}"),
         }
     }

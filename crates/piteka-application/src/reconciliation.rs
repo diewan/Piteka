@@ -271,14 +271,15 @@ pub struct ReconciliationUseCase<P>
 where
     P: ReconciliationPorts,
 {
+    tenant: piteka_storage::TenantScope,
     ports: P,
 }
 
 impl<P: ReconciliationPorts> ReconciliationUseCase<P> {
     /// Creates a new reconciliation use-case orchestrator.
     #[must_use]
-    pub const fn new(ports: P) -> Self {
-        Self { ports }
+    pub fn new(tenant: piteka_storage::TenantScope, ports: P) -> Self {
+        Self { tenant, ports }
     }
 
     /// Reconciles a quarantined mandate by checking the provider for the
@@ -329,7 +330,7 @@ impl<P: ReconciliationPorts> ReconciliationUseCase<P> {
         let mandate = self
             .ports
             .mandate_store()
-            .get(mandate_id_hex)
+            .get(&self.tenant, mandate_id_hex)
             .await?
             .ok_or_else(|| ReconciliationError::MandateNotFound(mandate_id_hex.to_string()))?;
 
@@ -349,7 +350,7 @@ impl<P: ReconciliationPorts> ReconciliationUseCase<P> {
         let attempts = self
             .ports
             .attempt_store()
-            .by_mandate(mandate_id_hex)
+            .by_mandate(&self.tenant, mandate_id_hex)
             .await?;
 
         let attempt = attempts
@@ -391,7 +392,12 @@ impl<P: ReconciliationPorts> ReconciliationUseCase<P> {
             let cas_result = self
                 .ports
                 .mandate_store()
-                .compare_and_swap(mandate_id_hex, expected_mandate_version, "consumed")
+                .compare_and_swap(
+                    &self.tenant,
+                    mandate_id_hex,
+                    expected_mandate_version,
+                    "consumed",
+                )
                 .await?;
 
             match cas_result {
@@ -401,18 +407,26 @@ impl<P: ReconciliationPorts> ReconciliationUseCase<P> {
                     if attempt.github_deployment_id != Some(correlated.deployment_id) {
                         self.ports
                             .attempt_store()
-                            .update_deployment_id(attempt_id_hex, correlated.deployment_id)
+                            .update_deployment_id(
+                                &self.tenant,
+                                attempt_id_hex,
+                                correlated.deployment_id,
+                            )
                             .await?;
                     }
                     self.ports
                         .attempt_store()
-                        .update_state(attempt_id_hex, ExecutionAttemptState::ReconciledAccepted)
+                        .update_state(
+                            &self.tenant,
+                            attempt_id_hex,
+                            ExecutionAttemptState::ReconciledAccepted,
+                        )
                         .await?;
 
                     // Audit.
                     self.ports
                         .audit_log()
-                        .append(piteka_storage::model::AuditEvent {
+                        .append(&self.tenant, piteka_storage::model::AuditEvent {
                             occurred_at_unix_seconds: now,
                             actor: Some(executor_identity.to_string()),
                             action: "reconciliation.accepted".to_string(),
@@ -463,7 +477,7 @@ impl<P: ReconciliationPorts> ReconciliationUseCase<P> {
         let mandate = self
             .ports
             .mandate_store()
-            .get(mandate_id_hex)
+            .get(&self.tenant, mandate_id_hex)
             .await?
             .ok_or_else(|| ReconciliationError::MandateNotFound(mandate_id_hex.to_string()))?;
         if mandate.state != "quarantined" {
@@ -474,7 +488,7 @@ impl<P: ReconciliationPorts> ReconciliationUseCase<P> {
         let attempt = self
             .ports
             .attempt_store()
-            .by_mandate(mandate_id_hex)
+            .by_mandate(&self.tenant, mandate_id_hex)
             .await?
             .into_iter()
             .find(|attempt| attempt.state == ExecutionAttemptState::OutcomeAmbiguous)
@@ -487,47 +501,62 @@ impl<P: ReconciliationPorts> ReconciliationUseCase<P> {
         let cas_result = self
             .ports
             .mandate_store()
-            .compare_and_swap(mandate_id_hex, expected_mandate_version, "abandoned")
+            .compare_and_swap(
+                &self.tenant,
+                mandate_id_hex,
+                expected_mandate_version,
+                "abandoned",
+            )
             .await?;
 
         match cas_result {
             CasOutcome::Applied { new_version } => {
                 self.ports
                     .attempt_store()
-                    .update_state(&attempt_id_hex, ExecutionAttemptState::AbandonedAmbiguous)
+                    .update_state(
+                        &self.tenant,
+                        &attempt_id_hex,
+                        ExecutionAttemptState::AbandonedAmbiguous,
+                    )
                     .await?;
 
                 // Record receipt with Unknown outcome.
                 let receipt_id_hex = format!("rcpt-abandoned-{}", attempt_id_hex);
                 self.ports
                     .receipt_store()
-                    .insert(piteka_storage::model::ReceiptProjection {
-                        receipt_id_hex,
-                        mandate_id_hex: mandate_id_hex.to_string(),
-                        intent_id_hex: intent_id_hex.clone(),
-                        attempt_id_hex: attempt_id_hex.clone(),
-                        outcome: ReceiptOutcome::Unknown,
-                        created_at_unix_seconds: now,
-                        dispatch_evidence_refs: vec![],
-                        target_evidence_refs: vec![],
-                        evidence_gaps: vec!["target_outcome".to_string()],
-                        canonical_bytes: None,
-                    })
+                    .insert(
+                        &self.tenant,
+                        piteka_storage::model::ReceiptProjection {
+                            receipt_id_hex,
+                            mandate_id_hex: mandate_id_hex.to_string(),
+                            intent_id_hex: intent_id_hex.clone(),
+                            attempt_id_hex: attempt_id_hex.clone(),
+                            outcome: ReceiptOutcome::Unknown,
+                            created_at_unix_seconds: now,
+                            dispatch_evidence_refs: vec![],
+                            target_evidence_refs: vec![],
+                            evidence_gaps: vec!["target_outcome".to_string()],
+                            canonical_bytes: None,
+                        },
+                    )
                     .await?;
 
                 // Audit.
                 self.ports
                     .audit_log()
-                    .append(piteka_storage::model::AuditEvent {
-                        occurred_at_unix_seconds: now,
-                        actor: Some(executor_identity.to_string()),
-                        action: "reconciliation.abandoned".to_string(),
-                        decision: "abandoned".to_string(),
-                        detail: format!(
-                            "mandate {} abandoned (ambiguous), attempt {}, reason={}",
-                            mandate_id_hex, attempt_id_hex, reason
-                        ),
-                    })
+                    .append(
+                        &self.tenant,
+                        piteka_storage::model::AuditEvent {
+                            occurred_at_unix_seconds: now,
+                            actor: Some(executor_identity.to_string()),
+                            action: "reconciliation.abandoned".to_string(),
+                            decision: "abandoned".to_string(),
+                            detail: format!(
+                                "mandate {} abandoned (ambiguous), attempt {}, reason={}",
+                                mandate_id_hex, attempt_id_hex, reason
+                            ),
+                        },
+                    )
                     .await?;
 
                 Ok(ReconciliationOutcome::AbandonedAmbiguous {

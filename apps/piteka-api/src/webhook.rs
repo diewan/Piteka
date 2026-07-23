@@ -360,7 +360,7 @@ mod tests {
 
         let stored = ports
             .webhook_receipt_store
-            .get("delivery-1")
+            .get(&ports.tenant, "delivery-1")
             .await
             .unwrap()
             .unwrap();
@@ -397,7 +397,7 @@ mod tests {
         assert!(
             ports
                 .webhook_receipt_store
-                .get("ping-delivery")
+                .get(&ports.tenant, "ping-delivery")
                 .await
                 .unwrap()
                 .is_none()
@@ -416,7 +416,7 @@ mod tests {
         assert!(
             ports
                 .webhook_receipt_store
-                .get("forged")
+                .get(&ports.tenant, "forged")
                 .await
                 .unwrap()
                 .is_none()

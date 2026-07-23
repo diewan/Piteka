@@ -13,6 +13,10 @@ use piteka_storage::ports::{
     ExecutionAttemptStore, ProtocolObjectStore, ReceiptProjectionStore, SealConsumptionStore,
 };
 
+fn tenant() -> piteka_storage::TenantScope {
+    piteka_storage::TenantScope::new("test-tenant").unwrap()
+}
+
 fn sample_attempt(deployment_id: u64) -> ExecutionAttempt {
     ExecutionAttempt {
         attempt_id_hex: "att-mand-002".to_string(),
@@ -47,12 +51,13 @@ async fn assemble_bundle_success() {
 
     // Insert execution attempt.
     let attempt = sample_attempt(42);
-    attempt_store.insert(attempt).await.unwrap();
+    attempt_store.insert(&tenant(), attempt).await.unwrap();
 
     // Produce receipt via webhook processing.
     let payload = success_payload();
     let event = parse_deployment_status(&payload).expect("should parse");
     let result = produce_receipt_from_webhook(
+        &tenant(),
         &*receipt_store,
         &*evidence_store,
         &*audit_log,
@@ -65,6 +70,7 @@ async fn assemble_bundle_success() {
 
     // Assemble bundle.
     let bundle = assemble_bundle(
+        &tenant(),
         &*receipt_store,
         &*evidence_store,
         &*evidence_blob_store,
@@ -89,42 +95,60 @@ async fn manifest_discloses_a_stored_single_use_anchor_and_omits_an_absent_one()
     let seal_store = InMemorySealConsumptionStore::default();
 
     receipt_store
-        .insert(piteka_storage::model::ReceiptProjection {
-            receipt_id_hex: "rcpt-anchor".into(),
-            mandate_id_hex: "mandate-anchor".into(),
-            intent_id_hex: "intent".into(),
-            attempt_id_hex: "attempt".into(),
-            outcome: piteka_storage::model::ReceiptOutcome::Succeeded,
-            created_at_unix_seconds: 1,
-            dispatch_evidence_refs: vec![],
-            target_evidence_refs: vec![],
-            evidence_gaps: vec![],
-            canonical_bytes: None,
-        })
+        .insert(
+            &tenant(),
+            piteka_storage::model::ReceiptProjection {
+                receipt_id_hex: "rcpt-anchor".into(),
+                mandate_id_hex: "mandate-anchor".into(),
+                intent_id_hex: "intent".into(),
+                attempt_id_hex: "attempt".into(),
+                outcome: piteka_storage::model::ReceiptOutcome::Succeeded,
+                created_at_unix_seconds: 1,
+                dispatch_evidence_refs: vec![],
+                target_evidence_refs: vec![],
+                evidence_gaps: vec![],
+                canonical_bytes: None,
+            },
+        )
         .await
         .unwrap();
 
     // With no stored proof, the manifest carries an explicit null anchor (a limitation).
-    let bytes = export_manifest_bytes(&receipt_store, &evidence_store, &seal_store, "rcpt-anchor")
-        .await
-        .unwrap();
+    let bytes = export_manifest_bytes(
+        &tenant(),
+        &receipt_store,
+        &evidence_store,
+        &seal_store,
+        "rcpt-anchor",
+    )
+    .await
+    .unwrap();
     let manifest: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert!(manifest["single_use_anchor"].is_null());
 
     // Once the proof exists for the receipt's mandate, the manifest discloses it verbatim.
     seal_store
-        .put(SealConsumptionProofRecord {
-            mandate_id_hex: "mandate-anchor".into(),
-            seal_id_hex: "aa".repeat(32),
-            nullifier_hex: "bb".repeat(32),
-            commitment_hex: "cc".repeat(32),
-            anchor_backend: "csv-seal.local.v1".into(),
-        })
+        .put(
+            &tenant(),
+            SealConsumptionProofRecord {
+                mandate_id_hex: "mandate-anchor".into(),
+                seal_id_hex: "aa".repeat(32),
+                nullifier_hex: "bb".repeat(32),
+                commitment_hex: "cc".repeat(32),
+                anchor_backend: "csv-seal.local.v1".into(),
+            },
+        )
         .await
         .unwrap();
-    let bytes = export_manifest_bytes(&receipt_store, &evidence_store, &seal_store, "rcpt-anchor")
-        .await
-        .unwrap();
+    let bytes = export_manifest_bytes(
+        &tenant(),
+        &receipt_store,
+        &evidence_store,
+        &seal_store,
+        "rcpt-anchor",
+    )
+    .await
+    .unwrap();
     let manifest: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let anchor = &manifest["single_use_anchor"];
     assert_eq!(anchor["seal_id_hex"], "aa".repeat(32));
@@ -141,6 +165,7 @@ async fn assemble_bundle_receipt_not_found() {
     let receipt_store = std::sync::Arc::new(InMemoryReceiptProjectionStore::default());
 
     let result = assemble_bundle(
+        &tenant(),
         &*receipt_store,
         &*evidence_store,
         &*evidence_blob_store,
@@ -153,6 +178,48 @@ async fn assemble_bundle_receipt_not_found() {
 }
 
 #[tokio::test]
+async fn export_cannot_read_a_receipt_from_another_tenant() {
+    let receipt_store = InMemoryReceiptProjectionStore::default();
+    let evidence_store = InMemoryEvidenceNodeStore::default();
+    let seal_store = InMemorySealConsumptionStore::default();
+    let owner = piteka_storage::TenantScope::new("owner").unwrap();
+    let attacker = piteka_storage::TenantScope::new("attacker").unwrap();
+
+    receipt_store
+        .insert(
+            &owner,
+            piteka_storage::model::ReceiptProjection {
+                receipt_id_hex: "same-receipt".into(),
+                mandate_id_hex: "mandate".into(),
+                intent_id_hex: "intent".into(),
+                attempt_id_hex: "attempt".into(),
+                outcome: piteka_storage::model::ReceiptOutcome::Succeeded,
+                created_at_unix_seconds: 1,
+                dispatch_evidence_refs: vec![],
+                target_evidence_refs: vec![],
+                evidence_gaps: vec![],
+                canonical_bytes: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let error = export_manifest_bytes(
+        &attacker,
+        &receipt_store,
+        &evidence_store,
+        &seal_store,
+        "same-receipt",
+    )
+    .await
+    .expect_err("cross-tenant export must fail closed");
+    assert!(matches!(
+        error,
+        crate::bundle_export::BundleExportError::ReceiptNotFound(_)
+    ));
+}
+
+#[tokio::test]
 async fn assemble_bundle_fails_closed_when_referenced_evidence_is_missing() {
     let receipt_store = InMemoryReceiptProjectionStore::default();
     let evidence_store = InMemoryEvidenceNodeStore::default();
@@ -160,22 +227,26 @@ async fn assemble_bundle_fails_closed_when_referenced_evidence_is_missing() {
     let protocol_store = InMemoryProtocolObjectStore::default();
 
     receipt_store
-        .insert(piteka_storage::model::ReceiptProjection {
-            receipt_id_hex: "rcpt-missing".into(),
-            mandate_id_hex: "mandate".into(),
-            intent_id_hex: "intent".into(),
-            attempt_id_hex: "attempt".into(),
-            outcome: piteka_storage::model::ReceiptOutcome::Unknown,
-            created_at_unix_seconds: 1,
-            dispatch_evidence_refs: vec!["ev-absent".into()],
-            target_evidence_refs: vec![],
-            evidence_gaps: vec![],
-            canonical_bytes: None,
-        })
+        .insert(
+            &tenant(),
+            piteka_storage::model::ReceiptProjection {
+                receipt_id_hex: "rcpt-missing".into(),
+                mandate_id_hex: "mandate".into(),
+                intent_id_hex: "intent".into(),
+                attempt_id_hex: "attempt".into(),
+                outcome: piteka_storage::model::ReceiptOutcome::Unknown,
+                created_at_unix_seconds: 1,
+                dispatch_evidence_refs: vec!["ev-absent".into()],
+                target_evidence_refs: vec![],
+                evidence_gaps: vec![],
+                canonical_bytes: None,
+            },
+        )
         .await
         .unwrap();
 
     let error = assemble_bundle(
+        &tenant(),
         &receipt_store,
         &evidence_store,
         &evidence_blob_store,
@@ -205,11 +276,12 @@ async fn bundle_contains_source_attribution() {
     let protocol_store = std::sync::Arc::new(InMemoryProtocolObjectStore::default());
 
     let attempt = sample_attempt(42);
-    attempt_store.insert(attempt).await.unwrap();
+    attempt_store.insert(&tenant(), attempt).await.unwrap();
 
     let payload = success_payload();
     let event = parse_deployment_status(&payload).expect("should parse");
     let result = produce_receipt_from_webhook(
+        &tenant(),
         &*receipt_store,
         &*evidence_store,
         &*audit_log,
@@ -221,6 +293,7 @@ async fn bundle_contains_source_attribution() {
     .unwrap();
 
     let bundle = assemble_bundle(
+        &tenant(),
         &*receipt_store,
         &*evidence_store,
         &*evidence_blob_store,
@@ -235,7 +308,10 @@ async fn bundle_contains_source_attribution() {
     assert!(!bundle.evidence_node_ids.is_empty());
 
     // The protocol store should contain the bundle.
-    let stored = protocol_store.get(&bundle.bundle_id_hex).await.unwrap();
+    let stored = protocol_store
+        .get(&tenant(), &bundle.bundle_id_hex)
+        .await
+        .unwrap();
     assert!(
         stored.is_some(),
         "bundle should be stored in protocol objects"

@@ -25,11 +25,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // database, everything falls back to in-memory TestPorts for a
     // zero-dependency demo.
     let (web_router, api_router) = if let Ok(database_url) = std::env::var("DATABASE_URL") {
-        let live = piteka_api::LiveActionRequestPorts::connect(&database_url).await?;
+        let tenant = piteka_storage::TenantScope::new(
+            std::env::var("PITEKA_TENANT_ID").unwrap_or_else(|_| "local-demo".to_string()),
+        )?;
+        let live =
+            piteka_api::LiveActionRequestPorts::connect(&database_url, tenant.clone()).await?;
         let web = piteka_web::web_router(live.use_case());
         let api = piteka_api::routes::build_full_router(live.use_case())
-            .merge(piteka_api::routes::build_live_webhook_router(&database_url).await?)
-            .merge(piteka_api::routes::build_live_read_router(&database_url).await?);
+            .merge(
+                piteka_api::routes::build_live_webhook_router(&database_url, tenant.clone())
+                    .await?,
+            )
+            .merge(piteka_api::routes::build_live_read_router(&database_url, tenant).await?);
         (web, api)
     } else {
         let test_ports = TestPorts::new();

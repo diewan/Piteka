@@ -115,6 +115,7 @@ fn default_limit() -> u32 {
 /// receipts produced after startup appear without restarting the server.
 #[derive(Clone)]
 struct FeedState {
+    tenant: piteka_storage::TenantScope,
     bearer_token: Arc<String>,
     receipts: PgReceiptProjectionStore,
     evidence: PgEvidenceNodeStore,
@@ -151,6 +152,7 @@ fn load_signing_key(path: &str) -> Result<SigningKey, String> {
 /// consumer's per-observation sync cursor advances monotonically and the same
 /// receipt keeps the same `emitted_at` across pulls.
 async fn build_exports(
+    tenant: &piteka_storage::TenantScope,
     receipts: &PgReceiptProjectionStore,
     evidence: &PgEvidenceNodeStore,
     seals: &PgSealConsumptionStore,
@@ -166,13 +168,14 @@ async fn build_exports(
         // evidence) is skipped, not fatal: one bad receipt must not take the
         // whole feed offline. Skipping is deterministic, so sequence numbers
         // over the successful receipts stay stable across pulls.
-        let payload = match export_manifest_bytes(receipts, evidence, seals, receipt_id).await {
-            Ok(payload) => payload,
-            Err(error) => {
-                eprintln!("feed: skipping receipt {receipt_id}: {error}");
-                continue;
-            }
-        };
+        let payload =
+            match export_manifest_bytes(tenant, receipts, evidence, seals, receipt_id).await {
+                Ok(payload) => payload,
+                Err(error) => {
+                    eprintln!("feed: skipping receipt {receipt_id}: {error}");
+                    continue;
+                }
+            };
         let payload_sha256: [u8; 32] = Sha256::digest(&payload).into();
         let emitted_at = (*created_at).max(0) as u64;
         let emitted_at = emitted_at.max(last_emitted + 1);
@@ -205,7 +208,7 @@ async fn current_receipts(state: &FeedState) -> Result<Vec<(String, i64)>, Strin
             for id in ids.iter() {
                 let receipt = state
                     .receipts
-                    .get(id)
+                    .get(&state.tenant, id)
                     .await
                     .map_err(|e| format!("cannot load receipt {id}: {e}"))?
                     .ok_or_else(|| format!("receipt {id} not found"))?;
@@ -217,7 +220,7 @@ async fn current_receipts(state: &FeedState) -> Result<Vec<(String, i64)>, Strin
         }
         None => state
             .receipts
-            .list_ids_ordered()
+            .list_ids_ordered(&state.tenant)
             .await
             .map_err(|e| format!("cannot list receipts: {e}")),
     }
@@ -246,6 +249,7 @@ async fn serve_feed(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
     let exports = build_exports(
+        &state.tenant,
         &state.receipts,
         &state.evidence,
         &state.seals,
@@ -282,6 +286,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let signing_key = load_signing_key(&required("PITEKA_FEED_SIGNING_KEY_FILE")?)?;
     let signing_key_id = required("PITEKA_FEED_SIGNING_KEY_ID")?;
     let tenant_id = required("PITEKA_FEED_TENANT_ID")?;
+    let tenant = piteka_storage::TenantScope::new(&tenant_id)?;
     let bearer_token = required("PITEKA_FEED_BEARER_TOKEN")?;
     // Optional allow-list. When unset, the feed publishes every receipt in the
     // store so new deployments appear live.
@@ -318,6 +323,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let state = FeedState {
+        tenant,
         bearer_token: Arc::new(bearer_token),
         receipts,
         evidence,
