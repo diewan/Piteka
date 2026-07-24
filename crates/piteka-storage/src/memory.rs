@@ -15,13 +15,13 @@ use crate::model::{
     ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome,
     CaseAppendOutcome, CaseEvent, EvidenceDescriptor, EvidenceNodeRecord, ExecutionAttempt,
     ExecutionAttemptState, InvestigatorCase, MandateProjection, ProtocolObjectRecord,
-    ReceiptProjection, SealConsumptionProofRecord, TenantScope, WebhookReceipt,
+    ReceiptProjection, SealConsumptionProofRecord, TenantScope, WebhookDeliveryRecord,
     WebhookRecordOutcome,
 };
 use crate::ports::{
     ActionRequestStore, ApprovalDecisionStore, AuditLog, EvidenceNodeStore, EvidenceObjectStore,
     ExecutionAttemptStore, InvestigatorCaseStore, MandateProjectionStore, ProtocolObjectStore,
-    ReceiptProjectionStore, SealConsumptionStore, WebhookReceiptStore,
+    ReceiptProjectionStore, SealConsumptionStore, WebhookDeliveryStore,
 };
 
 /// In-memory investigator-case repository enforcing tenant scope and append-only history.
@@ -320,16 +320,16 @@ impl MandateProjectionStore for InMemoryMandateProjectionStore {
 
 /// In-memory webhook receipt store keyed by unique delivery id.
 #[derive(Default)]
-pub struct InMemoryWebhookReceiptStore {
-    receipts: Mutex<HashMap<(String, String), WebhookReceipt>>,
+pub struct InMemoryWebhookDeliveryStore {
+    receipts: Mutex<HashMap<(String, String), WebhookDeliveryRecord>>,
 }
 
 #[async_trait]
-impl WebhookReceiptStore for InMemoryWebhookReceiptStore {
+impl WebhookDeliveryStore for InMemoryWebhookDeliveryStore {
     async fn record(
         &self,
         tenant: &TenantScope,
-        receipt: WebhookReceipt,
+        receipt: WebhookDeliveryRecord,
     ) -> StorageResult<WebhookRecordOutcome> {
         if receipt.delivery_id.is_empty() {
             return Err(StorageError::EmptyField("delivery_id"));
@@ -347,7 +347,7 @@ impl WebhookReceiptStore for InMemoryWebhookReceiptStore {
         &self,
         tenant: &TenantScope,
         delivery_id: &str,
-    ) -> StorageResult<Option<WebhookReceipt>> {
+    ) -> StorageResult<Option<WebhookDeliveryRecord>> {
         Ok(self
             .receipts
             .lock()
@@ -357,11 +357,18 @@ impl WebhookReceiptStore for InMemoryWebhookReceiptStore {
     }
 }
 
+/// An evidence blob keyed by tenant scope and content address.
+///
+/// The tenant is part of the key, not a filter applied afterwards, so a lookup
+/// cannot reach across tenants even if a caller supplies a digest it observed
+/// elsewhere.
+type TenantScopedByDigest<V> = Mutex<HashMap<(String, [u8; 32]), V>>;
+
 /// In-memory content-addressed evidence store.
 #[derive(Default)]
 pub struct InMemoryEvidenceStore {
-    blobs: Mutex<HashMap<(String, [u8; 32]), Vec<u8>>>,
-    descriptors: Mutex<HashMap<(String, [u8; 32]), EvidenceDescriptor>>,
+    blobs: TenantScopedByDigest<Vec<u8>>,
+    descriptors: TenantScopedByDigest<EvidenceDescriptor>,
 }
 
 #[async_trait]
@@ -914,11 +921,11 @@ impl AuditLog for std::sync::Arc<InMemoryAuditLog> {
 }
 
 #[async_trait]
-impl WebhookReceiptStore for std::sync::Arc<InMemoryWebhookReceiptStore> {
+impl WebhookDeliveryStore for std::sync::Arc<InMemoryWebhookDeliveryStore> {
     async fn record(
         &self,
         tenant: &TenantScope,
-        receipt: WebhookReceipt,
+        receipt: WebhookDeliveryRecord,
     ) -> StorageResult<WebhookRecordOutcome> {
         self.as_ref().record(tenant, receipt).await
     }
@@ -926,7 +933,7 @@ impl WebhookReceiptStore for std::sync::Arc<InMemoryWebhookReceiptStore> {
         &self,
         tenant: &TenantScope,
         delivery_id: &str,
-    ) -> StorageResult<Option<WebhookReceipt>> {
+    ) -> StorageResult<Option<WebhookDeliveryRecord>> {
         self.as_ref().get(tenant, delivery_id).await
     }
 }

@@ -42,12 +42,12 @@ pub use model::{
     CaseAppendOutcome, CaseEvent, EvidenceDescriptor, EvidenceNodeRecord, EvidenceSource,
     ExecutionAttempt, ExecutionAttemptState, InvestigatorCase, MandateProjection,
     ProtocolObjectRecord, ReceiptOutcome, ReceiptProjection, SealConsumptionProofRecord,
-    TenantScope, WebhookReceipt, WebhookRecordOutcome,
+    TenantScope, WebhookDeliveryRecord, WebhookRecordOutcome,
 };
 pub use ports::{
     ActionRequestStore, ApprovalDecisionStore, AuditLog, EvidenceNodeStore, EvidenceObjectStore,
     ExecutionAttemptStore, InvestigatorCaseStore, MandateProjectionStore, ProtocolObjectStore,
-    ReceiptProjectionStore, SealConsumptionStore, WebhookReceiptStore,
+    ReceiptProjectionStore, SealConsumptionStore, WebhookDeliveryStore,
 };
 
 #[cfg(test)]

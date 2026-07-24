@@ -4,7 +4,9 @@
 //! Tenant-authenticated REST adapter for Tuppira observation queries.
 
 use async_trait::async_trait;
-use piteka_application::{Observation, ObservationError, ObservationPort, SourceHealth};
+use piteka_application::{
+    ObservationError, ObservationPort, ObservationSourceHealth, TuppiraObservation,
+};
 use reqwest::{StatusCode, header};
 use serde::Deserialize;
 use std::time::Duration;
@@ -144,21 +146,26 @@ impl ObservationPort for TuppiraObservationAdapter {
         &self,
         tenant_id: &str,
         observation_id: &str,
-    ) -> Result<Vec<Observation>, ObservationError> {
+    ) -> Result<Vec<TuppiraObservation>, ObservationError> {
         validate_identifier(observation_id, "observation")?;
         let encoded: String =
             url::form_urlencoded::byte_serialize(observation_id.as_bytes()).collect();
         let rows: Vec<ObservationDto> = self
             .get(tenant_id, &format!("api/v1/observations/{encoded}/lineage"))
             .await?;
-        rows.into_iter().map(Observation::try_from).collect()
+        rows.into_iter().map(TuppiraObservation::try_from).collect()
     }
 
-    async fn source_health(&self, tenant_id: &str) -> Result<Vec<SourceHealth>, ObservationError> {
+    async fn source_health(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<ObservationSourceHealth>, ObservationError> {
         let rows: Vec<SourceHealthDto> = self
             .get(tenant_id, "api/v1/observation-sources/health")
             .await?;
-        rows.into_iter().map(SourceHealth::try_from).collect()
+        rows.into_iter()
+            .map(ObservationSourceHealth::try_from)
+            .collect()
     }
 }
 
@@ -187,7 +194,7 @@ struct ObservationDto {
     visibility_scope: String,
 }
 
-impl TryFrom<ObservationDto> for Observation {
+impl TryFrom<ObservationDto> for TuppiraObservation {
     type Error = ObservationError;
     fn try_from(value: ObservationDto) -> Result<Self, Self::Error> {
         for (name, item) in [
@@ -241,7 +248,7 @@ struct SourceHealthDto {
     cursor_observed_at: Option<i64>,
 }
 
-impl TryFrom<SourceHealthDto> for SourceHealth {
+impl TryFrom<SourceHealthDto> for ObservationSourceHealth {
     type Error = ObservationError;
     fn try_from(value: SourceHealthDto) -> Result<Self, Self::Error> {
         validate_identifier(&value.source_id, "source")?;
@@ -374,7 +381,7 @@ mod tests {
         }))
         .unwrap();
         assert!(matches!(
-            Observation::try_from(dto),
+            TuppiraObservation::try_from(dto),
             Err(ObservationError::Malformed(_))
         ));
     }

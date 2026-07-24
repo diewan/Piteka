@@ -8,7 +8,7 @@ use crate::model::{
     ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome,
     CaseAppendOutcome, CaseEvent, EvidenceDescriptor, EvidenceNodeRecord, ExecutionAttempt,
     InvestigatorCase, MandateProjection, ProtocolObjectRecord, ReceiptProjection,
-    SealConsumptionProofRecord, TenantScope, WebhookReceipt, WebhookRecordOutcome,
+    SealConsumptionProofRecord, TenantScope, WebhookDeliveryRecord, WebhookRecordOutcome,
 };
 
 /// Tenant-scoped, append-only investigator case repository.
@@ -142,7 +142,7 @@ pub trait MandateProjectionStore: Send + Sync {
 
 /// Idempotent webhook delivery storage keyed by unique delivery id.
 #[async_trait]
-pub trait WebhookReceiptStore: Send + Sync {
+pub trait WebhookDeliveryStore: Send + Sync {
     /// Records a delivery once. A repeated delivery id is a no-op duplicate.
     ///
     /// # Errors
@@ -151,7 +151,7 @@ pub trait WebhookReceiptStore: Send + Sync {
     async fn record(
         &self,
         tenant: &TenantScope,
-        receipt: WebhookReceipt,
+        delivery: WebhookDeliveryRecord,
     ) -> StorageResult<WebhookRecordOutcome>;
 
     /// Fetches a previously recorded delivery.
@@ -163,7 +163,7 @@ pub trait WebhookReceiptStore: Send + Sync {
         &self,
         tenant: &TenantScope,
         delivery_id: &str,
-    ) -> StorageResult<Option<WebhookReceipt>>;
+    ) -> StorageResult<Option<WebhookDeliveryRecord>>;
 }
 
 /// Content-addressed storage for immutable evidence blobs.

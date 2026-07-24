@@ -11,7 +11,10 @@ use axum::{
 };
 use piteka_application::{ActionRequestPorts, ActionRequestUseCase};
 use piteka_storage::ActionRequestStatus;
-use piteka_ui::{DecisionRow, IntentPanelData, RequestDetailRow, WorkQueueRow};
+use piteka_ui::{
+    ApprovalDecisionItemViewModel, IntentPanelViewModel, RequestDetailItemViewModel,
+    WorkQueueItemViewModel,
+};
 
 use crate::{format_timestamp, status_for_decision, status_for_request};
 
@@ -34,7 +37,7 @@ fn request_status(status: ActionRequestStatus) -> &'static str {
 pub struct WorkQueueTemplate {
     pub title: String,
     pub current_page: String,
-    pub requests: Vec<WorkQueueRow>,
+    pub requests: Vec<WorkQueueItemViewModel>,
 }
 
 /// Request detail / approval panel page (S2).
@@ -43,8 +46,8 @@ pub struct WorkQueueTemplate {
 pub struct RequestDetailTemplate {
     pub title: String,
     pub current_page: String,
-    pub request: RequestDetailRow,
-    pub intent: IntentPanelData,
+    pub request: RequestDetailItemViewModel,
+    pub intent: IntentPanelViewModel,
 }
 
 /// Executions page (S3).
@@ -98,13 +101,13 @@ pub async fn work_queue<P: ActionRequestPorts>(
 ) -> Html<String> {
     let requests = use_case.list_requests().await.unwrap_or_default();
 
-    let rows: Vec<WorkQueueRow> = requests
+    let rows: Vec<WorkQueueItemViewModel> = requests
         .into_iter()
         .map(|r| {
             let status = request_status(r.status).to_string();
             let (status_class, status_icon, status_label) = status_for_request(&status);
             let (human, iso) = format_timestamp(r.created_at_unix_seconds as u64);
-            WorkQueueRow {
+            WorkQueueItemViewModel {
                 id: r.request_id,
                 requested_by: r.requested_by,
                 status,
@@ -161,12 +164,12 @@ pub async fn request_detail<P: ActionRequestPorts>(
     let (status_class, status_icon, status_label) = status_for_request(&status);
     let (req_human, req_iso) = format_timestamp(request.created_at_unix_seconds as u64);
 
-    let decision_rows: Vec<DecisionRow> = decisions
+    let decision_rows: Vec<ApprovalDecisionItemViewModel> = decisions
         .into_iter()
         .map(|d| {
             let (dec_class, dec_label) = status_for_decision(&d.decision);
             let (dec_human, dec_iso) = format_timestamp(d.decided_at_unix_seconds as u64);
-            DecisionRow {
+            ApprovalDecisionItemViewModel {
                 decided_by: d.decided_by,
                 decision: d.decision,
                 decision_class: dec_class,
@@ -177,7 +180,7 @@ pub async fn request_detail<P: ActionRequestPorts>(
         })
         .collect();
 
-    let request_row = RequestDetailRow {
+    let request_row = RequestDetailItemViewModel {
         id: request.request_id,
         requested_by: request.requested_by,
         status,
@@ -189,27 +192,17 @@ pub async fn request_detail<P: ActionRequestPorts>(
         decisions: decision_rows,
     };
 
-    // Build intent panel data from the request's intent_id
-    let intent = IntentPanelData {
-        repository_owner: "diewan".to_string(),
-        repository_name: "demo-app".to_string(),
-        commit_sha: request.intent_id_hex.clone().unwrap_or_else(|| {
-            "0000000000000000000000000000000000000000000000000000000000000000".to_string()
-        }),
-        environment_name: "production".to_string(),
-        production_environment: true,
-        task: "deploy".to_string(),
-        expires_at: None,
-        expires_at_human: "No expiry set".to_string(),
-        expired: false,
-        digest: request.intent_id_hex.clone().unwrap_or_else(|| {
-            "0000000000000000000000000000000000000000000000000000000000000000".to_string()
-        }),
-        evidence_requirements: vec![
-            "GitHub commit status: all required contexts passed".to_string(),
-            "Artifact attestation present".to_string(),
-        ],
-    };
+    // The action-request store holds exactly one intent-related value: the
+    // Parwana intent id, and only once the intent has been constructed. The
+    // deployment's repository, commit, environment, and task live in the
+    // canonical `ActionIntent` in `protocol_objects`, which this read path does
+    // not load — so they are left absent and rendered as "Not recorded in this
+    // view" rather than defaulted.
+    //
+    // This previously displayed `intent_id_hex` under a "Commit" label and filled
+    // the rest with fixed strings ("diewan/demo-app", "production"), which showed
+    // an approver deployment parameters that no stored record supported.
+    let intent = IntentPanelViewModel::from_recorded_intent_id(request.intent_id_hex.clone());
 
     let template = RequestDetailTemplate {
         title: format!("Request {}", request_id),

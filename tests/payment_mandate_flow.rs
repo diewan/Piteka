@@ -8,9 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use piteka::demo::demo_mandate_id;
-use piteka_parwana::protocol::{
-    ActionIntent, PaymentCodec, PaymentIntentV1, ProfileCodec,
-};
+use piteka_parwana::protocol::{ActionIntent, PaymentCodec, PaymentIntentV1, ProfileCodec};
 use piteka_storage::model::{CasOutcome, ReceiptOutcome, ReceiptProjection};
 use sha2::{Digest, Sha256};
 

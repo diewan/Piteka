@@ -9,7 +9,9 @@
 use piteka_ports::anchor::ConsumptionProof;
 use piteka_ports::chain_anchor::ChainAnchorRecord;
 
-use crate::protocol::{AnchorFinality, ChainAnchor, SealConsumptionRecord};
+use crate::protocol::{
+    ChainAnchorFinalityStatus, ChainCommitmentAnchorEvidence, SealConsumptionRecord,
+};
 
 /// Maps a port-level consumption proof to the canonical Parwana consumption record.
 ///
@@ -26,24 +28,24 @@ pub fn consumption_record_from_proof(proof: &ConsumptionProof) -> SealConsumptio
     }
 }
 
-/// Maps a port-level on-chain anchor record to the canonical Parwana [`ChainAnchor`]
+/// Maps a port-level on-chain anchor record to the canonical Parwana [`ChainCommitmentAnchorEvidence`]
 /// (ANCHOR-01).
 ///
 /// This is the single place a [`ChainAnchorRecord`] produced by a
 /// [`piteka_ports::chain_anchor::ChainAnchorPort`] backing is mapped to the
 /// canonical protocol value a bundle preserves and an offline verifier
 /// re-checks. The finality reading is projected through
-/// [`AnchorFinality::from_confirmations`], so the mapping never asserts finality —
+/// [`ChainAnchorFinalityStatus::from_confirmations`], so the mapping never asserts finality —
 /// it is derived from the observed depth against the required depth.
 #[must_use]
-pub fn chain_anchor_from_record(record: &ChainAnchorRecord) -> ChainAnchor {
-    ChainAnchor {
+pub fn chain_anchor_from_record(record: &ChainAnchorRecord) -> ChainCommitmentAnchorEvidence {
+    ChainCommitmentAnchorEvidence {
         commitment: record.commitment,
         chain_id: record.chain_id.clone(),
         anchor_ref: record.anchor_ref.clone(),
         block_height: record.block_height,
         block_hash: record.block_hash,
-        finality: AnchorFinality::from_confirmations(
+        finality: ChainAnchorFinalityStatus::from_confirmations(
             record.observed_confirmations,
             record.required_confirmations,
         ),
@@ -89,13 +91,13 @@ mod tests {
         );
     }
 
-    /// ANCHOR-01: a port-level chain anchor maps to a canonical `ChainAnchor`
+    /// ANCHOR-01: a port-level chain anchor maps to a canonical `ChainCommitmentAnchorEvidence`
     /// that re-verifies offline from its exact bytes — a pending reading stays
     /// pending, and a final reading assesses as anchored-final for the expected
     /// commitment.
     #[test]
     fn chain_anchor_record_maps_to_a_value_that_reverifies_offline() {
-        use crate::protocol::{ChainAnchor, ChainAnchorAssessment};
+        use crate::protocol::{ChainAnchorVerificationResult, ChainCommitmentAnchorEvidence};
 
         let commitment = [0x11u8; 32];
         let pending_record = ChainAnchorRecord {
@@ -112,10 +114,13 @@ mod tests {
         let anchor = chain_anchor_from_record(&pending_record);
         // Offline re-verification: exact canonical-byte round-trip.
         let bytes = anchor.canonical_bytes().expect("canonical bytes");
-        assert_eq!(ChainAnchor::from_canonical_bytes(&bytes).unwrap(), anchor);
+        assert_eq!(
+            ChainCommitmentAnchorEvidence::from_canonical_bytes(&bytes).unwrap(),
+            anchor
+        );
         assert_eq!(
             anchor.assess(commitment),
-            ChainAnchorAssessment::AnchoredPending
+            ChainAnchorVerificationResult::AnchoredPending
         );
 
         // Once enough confirmations accrue, the same commitment assesses as final.
@@ -127,12 +132,12 @@ mod tests {
         assert!(final_anchor.finality.is_final());
         assert_eq!(
             final_anchor.assess(commitment),
-            ChainAnchorAssessment::AnchoredFinal
+            ChainAnchorVerificationResult::AnchoredFinal
         );
         // A different commitment cannot corroborate this object.
         assert_eq!(
             final_anchor.assess([0x99u8; 32]),
-            ChainAnchorAssessment::Inconsistent
+            ChainAnchorVerificationResult::Inconsistent
         );
     }
 }

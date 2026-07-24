@@ -45,10 +45,19 @@ fn signing_bytes_change_with_every_field() {
     let base = claims(Role::Requester, 100, 200).unwrap().signing_bytes();
 
     // Different role -> different bytes (a role-elevation tamper is not silent).
-    assert_ne!(base, claims(Role::Approver, 100, 200).unwrap().signing_bytes());
+    assert_ne!(
+        base,
+        claims(Role::Approver, 100, 200).unwrap().signing_bytes()
+    );
     // Different window -> different bytes.
-    assert_ne!(base, claims(Role::Requester, 101, 200).unwrap().signing_bytes());
-    assert_ne!(base, claims(Role::Requester, 100, 201).unwrap().signing_bytes());
+    assert_ne!(
+        base,
+        claims(Role::Requester, 101, 200).unwrap().signing_bytes()
+    );
+    assert_ne!(
+        base,
+        claims(Role::Requester, 100, 201).unwrap().signing_bytes()
+    );
 
     // Different subject -> different bytes.
     let other_subject = SessionClaims::new(

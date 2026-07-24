@@ -106,9 +106,18 @@ pub trait AuditSink: Send + Sync {
     async fn record(&self, event: &'static str, detail: String) -> Result<(), String>;
 }
 
-/// Exact, server-canonicalized approval intent.
+/// The exact, server-derived description of the action an approver is shown and
+/// signs over during a WebAuthn approval ceremony.
+///
+/// This is Piteka-owned application state, **not** a Parwana `ActionIntent`, and
+/// [`ApprovalCeremonyIntent::digest`] is **not** a Parwana intent id: it is a local
+/// length-prefixed SHA-256 over the displayed fields, used only to bind what was
+/// displayed to what was signed (Master Plan threat #18). It is deliberately not
+/// named `CanonicalIntent` — "canonical" belongs to Parwana's single serializer, and
+/// a name implying it would invite a reader to treat this digest as protocol
+/// identity. The canonical intent id lives in `ActionRequest::intent_id_hex`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CanonicalIntent {
+pub struct ApprovalCeremonyIntent {
     /// Tenant owning the intent.
     pub tenant_id: String,
     /// Action request identifier.
@@ -121,7 +130,7 @@ pub struct CanonicalIntent {
     pub revision: String,
 }
 
-impl CanonicalIntent {
+impl ApprovalCeremonyIntent {
     /// Produces one deterministic digest without relying on JSON map ordering.
     pub fn digest(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
@@ -228,7 +237,7 @@ where
         challenge: &ApprovalChallenge,
         tenant_id: &str,
         approver_id: &str,
-        displayed_intent: &CanonicalIntent,
+        displayed_intent: &ApprovalCeremonyIntent,
         assertion: &[u8],
         now_unix_seconds: u64,
     ) -> Result<ApprovalProof, ApprovalCeremonyError> {
@@ -281,7 +290,7 @@ pub enum IntentBindingError {
 
 /// Recomputes the intent at mutation time and rejects stale browser state.
 pub fn verify_intent_binding(
-    current: &CanonicalIntent,
+    current: &ApprovalCeremonyIntent,
     displayed_digest_hex: &str,
 ) -> Result<(), IntentBindingError> {
     if current.digest_hex() == displayed_digest_hex {
@@ -363,8 +372,8 @@ mod tests {
         }
     }
 
-    fn intent(revision: &str) -> CanonicalIntent {
-        CanonicalIntent {
+    fn intent(revision: &str) -> ApprovalCeremonyIntent {
+        ApprovalCeremonyIntent {
             tenant_id: "tenant-a".into(),
             request_id: "request-1".into(),
             environment: "production".into(),
@@ -415,6 +424,63 @@ mod tests {
         assert_eq!(
             verify_intent_binding(&intent("def"), &displayed),
             Err(IntentBindingError::StaleOrMutated)
+        );
+    }
+}
+
+#[cfg(test)]
+mod nam02_rename_compatibility {
+    use super::*;
+
+    /// NAM-02 renamed `CanonicalIntent` to `ApprovalCeremonyIntent` because
+    /// "canonical" belongs to Parwana's single serializer and this value is a
+    /// Piteka-local binding digest, not protocol identity.
+    ///
+    /// The rename is source-only, and this golden vector is what makes that claim
+    /// checkable: the digest is written to `approval_challenges.intent_digest` and
+    /// is compared against a WebAuthn assertion, so changing it would invalidate
+    /// every challenge already in flight. The literal below is the digest produced
+    /// before the rename.
+    #[test]
+    fn approval_ceremony_digest_is_unchanged_by_the_type_rename() {
+        let intent = ApprovalCeremonyIntent {
+            tenant_id: "tenant-a".to_string(),
+            request_id: "req-1".to_string(),
+            environment: "production".to_string(),
+            repository: "diewan/piteka".to_string(),
+            revision: "0123456789abcdef0123456789abcdef01234567".to_string(),
+        };
+        // Independently reproducible as
+        // SHA-256( for each field: be64(len) || field ) over
+        // tenant-a, req-1, production, diewan/piteka, 0123…4567.
+        assert_eq!(
+            intent.digest_hex(),
+            "38804b23f3713dc64e0dea362b55099b0804acd0b0d0ba4bf5c19cf5895a5e7c"
+        );
+    }
+
+    /// The ceremony digest is a distinct value from the Parwana intent id, and the
+    /// field separation that keeps them distinct still holds: every field is
+    /// length-prefixed, so no two different intents can collide by shifting a
+    /// delimiter across a boundary.
+    #[test]
+    fn ceremony_digest_still_separates_adjacent_fields() {
+        let a = ApprovalCeremonyIntent {
+            tenant_id: "tenant".to_string(),
+            request_id: "a-req".to_string(),
+            environment: "prod".to_string(),
+            repository: "repo".to_string(),
+            revision: "rev".to_string(),
+        };
+        let b = ApprovalCeremonyIntent {
+            tenant_id: "tenanta".to_string(),
+            request_id: "-req".to_string(),
+            ..a.clone()
+        };
+        assert_ne!(
+            a.digest(),
+            b.digest(),
+            "moving a character across a field boundary must change the digest"
         );
     }
 }

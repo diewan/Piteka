@@ -14,13 +14,13 @@ use crate::model::{
     ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome,
     CaseAppendOutcome, CaseEvent, EvidenceNodeRecord, EvidenceSource, ExecutionAttempt,
     ExecutionAttemptState, InvestigatorCase, MandateProjection, ProtocolObjectRecord,
-    ReceiptOutcome, ReceiptProjection, SealConsumptionProofRecord, TenantScope, WebhookReceipt,
-    WebhookRecordOutcome,
+    ReceiptOutcome, ReceiptProjection, SealConsumptionProofRecord, TenantScope,
+    WebhookDeliveryRecord, WebhookRecordOutcome,
 };
 use crate::ports::{
     ActionRequestStore, ApprovalDecisionStore, AuditLog, EvidenceNodeStore, ExecutionAttemptStore,
     InvestigatorCaseStore, MandateProjectionStore, ProtocolObjectStore, ReceiptProjectionStore,
-    SealConsumptionStore, WebhookReceiptStore,
+    SealConsumptionStore, WebhookDeliveryStore,
 };
 
 fn backend(error: sqlx::Error) -> StorageError {
@@ -437,11 +437,11 @@ impl MandateProjectionStore for PgMandateProjectionStore {
 
 /// Postgres webhook receipt store keyed by unique delivery id.
 #[derive(Clone)]
-pub struct PgWebhookReceiptStore {
+pub struct PgWebhookDeliveryStore {
     pool: PgPool,
 }
 
-impl PgWebhookReceiptStore {
+impl PgWebhookDeliveryStore {
     /// Wraps a pool.
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
@@ -450,11 +450,11 @@ impl PgWebhookReceiptStore {
 }
 
 #[async_trait]
-impl WebhookReceiptStore for PgWebhookReceiptStore {
+impl WebhookDeliveryStore for PgWebhookDeliveryStore {
     async fn record(
         &self,
         tenant: &TenantScope,
-        receipt: WebhookReceipt,
+        receipt: WebhookDeliveryRecord,
     ) -> StorageResult<WebhookRecordOutcome> {
         if receipt.delivery_id.is_empty() {
             return Err(StorageError::EmptyField("delivery_id"));
@@ -482,7 +482,7 @@ impl WebhookReceiptStore for PgWebhookReceiptStore {
         &self,
         tenant: &TenantScope,
         delivery_id: &str,
-    ) -> StorageResult<Option<WebhookReceipt>> {
+    ) -> StorageResult<Option<WebhookDeliveryRecord>> {
         let row = sqlx::query(
             "SELECT source, raw_digest, received_at FROM webhook_receipts WHERE tenant_id = $1 AND delivery_id = $2",
         )
@@ -496,7 +496,7 @@ impl WebhookReceiptStore for PgWebhookReceiptStore {
             let raw_digest = crate::digest::ContentDigest::from_hex(&raw_hex).ok_or_else(|| {
                 StorageError::Backend("stored webhook raw_digest is not valid hex".to_string())
             })?;
-            Ok(WebhookReceipt {
+            Ok(WebhookDeliveryRecord {
                 delivery_id: delivery_id.to_string(),
                 source: row.try_get("source").map_err(backend)?,
                 raw_digest,

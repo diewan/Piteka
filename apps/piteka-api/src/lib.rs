@@ -42,13 +42,13 @@ pub mod models;
 pub mod routes;
 pub mod webhook;
 
-pub use error::{ApiError, ErrorResponse};
+pub use error::{ApiError, ErrorResponseV1};
 pub use models::{
-    ActionRequestResponse, ActionRequestSummary, ApproveRequest, CreateActionRequestRequest,
-    RejectRequest, RevokeRequest,
+    ActionRequestResponseV1, ActionRequestSummaryDtoV1, ApproveActionRequestRequestV1,
+    CreateActionRequestRequestV1, RejectActionRequestRequestV1, RevokeActionRequestRequestV1,
 };
 
-use crate::error::{ErrorCause, ErrorDetail};
+use crate::error::{ErrorCauseDtoV1, ErrorDetailDtoV1};
 use axum::{extract::Request, middleware::Next, response::IntoResponse};
 use piteka_application::ActionRequestUseCase;
 use piteka_storage::{ActionRequestStore, ApprovalDecisionStore, AuditLog};
@@ -61,7 +61,16 @@ pub const OPENAPI_SPEC: &str = include_str!("../../../openapi/openapi.yaml");
 
 /// Middleware that extracts tenant from the `X-Tenant-Id` header.
 ///
-/// Fails closed when the header is missing.
+/// **Not currently mounted on any router.** The served routers take their
+/// [`TenantScope`](piteka_storage::TenantScope) from server-side configuration
+/// instead, so no request header can select a tenant — which is the stronger
+/// arrangement, and the reason this is unused rather than pending.
+///
+/// It is kept for the multi-tenant work, where a request-supplied tenant must be
+/// resolved from an authenticated session rather than a bare header. Because it
+/// is unmounted, `X-Tenant-Id` is deliberately absent from
+/// `openapi/openapi.yaml`: documenting it would advertise an enforcement that
+/// does not run. Tests that send the header do so harmlessly.
 #[allow(dead_code)]
 async fn require_tenant(req: Request, next: Next) -> axum::response::Response {
     let tenant_id = req
@@ -78,11 +87,11 @@ async fn require_tenant(req: Request, next: Next) -> axum::response::Response {
         }
         None => (
             axum::http::StatusCode::BAD_REQUEST,
-            axum::response::Json(ErrorResponse {
-                error: ErrorDetail {
+            axum::response::Json(ErrorResponseV1 {
+                error: ErrorDetailDtoV1 {
                     code: "MISSING_REQUIRED_HEADER".to_string(),
                     message: "The `X-Tenant-Id` header is required".to_string(),
-                    causes: Some(vec![ErrorCause {
+                    causes: Some(vec![ErrorCauseDtoV1 {
                         code: "MISSING_REQUIRED_HEADER".to_string(),
                         message: "The `X-Tenant-Id` header must be present".to_string(),
                         source: Some("X-Tenant-Id".to_string()),
@@ -101,7 +110,7 @@ pub struct TestPorts {
     pub request_store: std::sync::Arc<piteka_storage::memory::InMemoryActionRequestStore>,
     pub decision_store: std::sync::Arc<piteka_storage::memory::InMemoryApprovalDecisionStore>,
     pub audit_log: std::sync::Arc<piteka_storage::memory::InMemoryAuditLog>,
-    pub webhook_receipt_store: std::sync::Arc<piteka_storage::memory::InMemoryWebhookReceiptStore>,
+    pub webhook_receipt_store: std::sync::Arc<piteka_storage::memory::InMemoryWebhookDeliveryStore>,
     pub github_adapter: std::sync::Arc<MockGitHubAdapter>,
     pub webhook_processor: MockWebhookProcessor,
     // E-06: Receipt and evidence stores.
@@ -126,7 +135,7 @@ impl TestPorts {
             ),
             audit_log: std::sync::Arc::new(piteka_storage::memory::InMemoryAuditLog::default()),
             webhook_receipt_store: std::sync::Arc::new(
-                piteka_storage::memory::InMemoryWebhookReceiptStore::default(),
+                piteka_storage::memory::InMemoryWebhookDeliveryStore::default(),
             ),
             github_adapter: std::sync::Arc::new(MockGitHubAdapter::default()),
             webhook_processor: MockWebhookProcessor::default(),
@@ -161,7 +170,7 @@ impl TestPorts {
         &self,
     ) -> piteka_application::WebhookIngestionUseCase<
         MockWebhookProcessor,
-        std::sync::Arc<piteka_storage::memory::InMemoryWebhookReceiptStore>,
+        std::sync::Arc<piteka_storage::memory::InMemoryWebhookDeliveryStore>,
         std::sync::Arc<piteka_storage::memory::InMemoryAuditLog>,
     > {
         let ports = piteka_application::WebhookIngestionPorts::new(
@@ -383,8 +392,11 @@ impl piteka_ports::github::GitHubAppPort for MockGitHubAdapter {
         _auto_merge: bool,
         _payload_commitment: &str,
         _attempt_digest: [u8; 32],
-    ) -> Result<piteka_ports::github::DeploymentCreated, piteka_ports::github::GitHubAppError> {
-        Ok(piteka_ports::github::DeploymentCreated {
+    ) -> Result<
+        piteka_ports::github::DeploymentCreationResponse,
+        piteka_ports::github::GitHubAppError,
+    > {
+        Ok(piteka_ports::github::DeploymentCreationResponse {
             deployment_id: 0,
             url: String::new(),
             attempt_digest: [0u8; 32],

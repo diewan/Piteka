@@ -1,8 +1,8 @@
 //! Positive and adversarial coverage for identities and roles.
 
 use crate::identity::{
-    Capability, ConfiguredOrganization, Identity, IdentityError, Organization, OrganizationId, Role,
-    UserId,
+    Capability, ConfiguredOrganization, Identity, IdentityError, Organization, OrganizationId,
+    Role, UserId,
 };
 
 fn org_id() -> OrganizationId {
@@ -95,7 +95,10 @@ fn configured_organization_rejects_a_cross_organization_member() {
     .unwrap();
 
     match ConfiguredOrganization::new(organization, vec![foreign]) {
-        Err(IdentityError::CrossOrganizationMember { organization, member }) => {
+        Err(IdentityError::CrossOrganizationMember {
+            organization,
+            member,
+        }) => {
             assert_eq!(organization.as_str(), "diewan-demo");
             assert_eq!(member.as_str(), "other-tenant");
         }
@@ -106,12 +109,16 @@ fn configured_organization_rejects_a_cross_organization_member() {
 #[test]
 fn configured_organization_rejects_duplicate_members() {
     let organization = Organization::new(org_id(), "DieWan Demo").unwrap();
-    let make = |role| {
-        Identity::new(UserId::new("shared").unwrap(), org_id(), "Shared", role).unwrap()
-    };
+    let make =
+        |role| Identity::new(UserId::new("shared").unwrap(), org_id(), "Shared", role).unwrap();
     assert_eq!(
-        ConfiguredOrganization::new(organization, vec![make(Role::Requester), make(Role::Approver)]),
-        Err(IdentityError::DuplicateMember(UserId::new("shared").unwrap()))
+        ConfiguredOrganization::new(
+            organization,
+            vec![make(Role::Requester), make(Role::Approver)]
+        ),
+        Err(IdentityError::DuplicateMember(
+            UserId::new("shared").unwrap()
+        ))
     );
 }
 

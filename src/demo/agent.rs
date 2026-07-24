@@ -53,7 +53,12 @@ impl DeploymentPlan {
     /// this from the same parameters and rejects a mismatch.
     #[must_use]
     pub fn intent_id(&self, tenant: &str) -> String {
-        demo_intent_id(tenant, self.repository_id, &self.commit_sha, self.environment_id)
+        demo_intent_id(
+            tenant,
+            self.repository_id,
+            &self.commit_sha,
+            self.environment_id,
+        )
     }
 }
 
@@ -103,10 +108,7 @@ impl<'a, B: AccountabilityTools> AgentActor<'a, B> {
     }
 
     /// Step 1 — propose the deployment for human review.
-    pub async fn request_deployment(
-        &mut self,
-        plan: &DeploymentPlan,
-    ) -> Result<Value, AgentError> {
+    pub async fn request_deployment(&mut self, plan: &DeploymentPlan) -> Result<Value, AgentError> {
         let intent_id = plan.intent_id(self.identity.tenant_id());
         self.call(
             "piteka_request_deployment",

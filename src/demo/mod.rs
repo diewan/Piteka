@@ -31,7 +31,7 @@ use sha2::{Digest, Sha256};
 
 use piteka_application::dispatch::compute_attempt_digest;
 use piteka_application::mcp::{
-    AccountabilityTools, ExecuteDeployment, McpError, McpIdentity, RequestDeployment,
+    AccountabilityTools, ExecuteDeploymentInput, McpError, McpIdentity, RequestDeploymentInput,
 };
 use piteka_application::{
     ActionRequestPorts, ActionRequestUseCase, Clock, DispatchOutcome, DispatchPorts,
@@ -263,7 +263,7 @@ impl<G: GitHubAppPort> AccountabilityTools for AgentDemoBackend<G> {
     async fn request_deployment(
         &self,
         identity: &McpIdentity,
-        input: RequestDeployment,
+        input: RequestDeploymentInput,
     ) -> Result<Value, McpError> {
         self.check_target(input.repository_id, input.environment_id)?;
         let requester = UserId::new(identity.service_identity())
@@ -330,7 +330,7 @@ impl<G: GitHubAppPort> AccountabilityTools for AgentDemoBackend<G> {
     async fn execute_approved_deployment(
         &self,
         identity: &McpIdentity,
-        input: ExecuteDeployment,
+        input: ExecuteDeploymentInput,
     ) -> Result<Value, McpError> {
         self.check_target(input.repository_id, input.environment_id)?;
 

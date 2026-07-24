@@ -41,7 +41,7 @@ use piteka_ports::github::{
 
 use crate::error::ApiError;
 use crate::{MockGitHubAdapter, MockWebhookProcessor};
-use piteka_storage::ports::{AuditLog, WebhookReceiptStore};
+use piteka_storage::ports::{AuditLog, WebhookDeliveryStore};
 
 // ---------------------------------------------------------------------------
 // State
@@ -54,12 +54,12 @@ pub type WebhookState = crate::webhook::WebhookStateConcrete;
 #[derive(Clone)]
 pub struct WebhookStateConcrete<
     P = MockWebhookProcessor,
-    W = std::sync::Arc<piteka_storage::memory::InMemoryWebhookReceiptStore>,
+    W = std::sync::Arc<piteka_storage::memory::InMemoryWebhookDeliveryStore>,
     A = std::sync::Arc<piteka_storage::memory::InMemoryAuditLog>,
     G = MockGitHubAdapter,
 > where
     P: WebhookEventProcessor,
-    W: WebhookReceiptStore,
+    W: WebhookDeliveryStore,
     A: AuditLog,
     G: GitHubAppPort,
 {
@@ -102,7 +102,7 @@ pub async fn handle_webhook<P, W, A, G>(
 ) -> Response
 where
     P: WebhookEventProcessor + Clone + 'static,
-    W: WebhookReceiptStore + Clone + 'static,
+    W: WebhookDeliveryStore + Clone + 'static,
     A: AuditLog + Clone + 'static,
     G: GitHubAppPort + 'static,
 {
@@ -313,7 +313,7 @@ impl WebhookResponse {
 mod tests {
     use axum::{Router, body::Body, http::Request};
     use piteka_ports::github::WebhookSignatureResult;
-    use piteka_storage::ports::WebhookReceiptStore;
+    use piteka_storage::ports::WebhookDeliveryStore;
     use tower_service::Service;
 
     use super::*;

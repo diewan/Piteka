@@ -1,12 +1,31 @@
 //! Request and response types for the first-slice API.
 //!
 //! All types derive `Serialize` / `Deserialize` for JSON wire format.
+//!
+//! # Naming
+//!
+//! Every type here is an HTTP boundary shape on the `/api/v1` surface, so each
+//! carries an explicit role and version:
+//!
+//! - `RequestV1` — a request body accepted from a client.
+//! - `ResponseV1` — a complete response body returned for an endpoint.
+//! - `DtoV1` — a shape nested inside a request or response, never returned alone.
+//!
+//! These are **not** canonical Parwana wire types and must never be mistaken for
+//! them: `Wire` is reserved for representations whose field layout participates in
+//! the versioned protocol contract, and Piteka does not own that contract. These
+//! shapes serialize Piteka's own projections; a consumer that needs a verdict
+//! recomputes it against the Parwana verifier rather than trusting a field here.
+//!
+//! The `V1` suffix tracks the `/api/v1` path prefix. The type names are Rust-side
+//! only — the JSON keys and values are unchanged by them, and
+//! `api_v1_json_is_unchanged_by_type_renames` in `tests.rs` holds that line.
 
 use serde::{Deserialize, Serialize};
 
 /// The status of an action request as returned to the client.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ActionRequestStatus {
+pub enum ActionRequestStatusDtoV1 {
     /// Awaiting an approver's decision.
     Pending,
     /// Approved by an authorized approver.
@@ -17,7 +36,7 @@ pub enum ActionRequestStatus {
     Revoked,
 }
 
-impl From<piteka_storage::ActionRequestStatus> for ActionRequestStatus {
+impl From<piteka_storage::ActionRequestStatus> for ActionRequestStatusDtoV1 {
     fn from(status: piteka_storage::ActionRequestStatus) -> Self {
         match status {
             piteka_storage::ActionRequestStatus::Pending => Self::Pending,
@@ -30,20 +49,20 @@ impl From<piteka_storage::ActionRequestStatus> for ActionRequestStatus {
 
 /// A compact summary returned by the list endpoint.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ActionRequestSummary {
+pub struct ActionRequestSummaryDtoV1 {
     /// The request identifier.
     pub id: String,
     /// The user who proposed the request.
     pub requested_by: String,
     /// Current status.
-    pub status: ActionRequestStatus,
+    pub status: ActionRequestStatusDtoV1,
     /// Creation time, Unix seconds.
     pub created_at: u64,
 }
 
 /// Full action request detail returned by the get endpoint.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ActionRequestResponse {
+pub struct ActionRequestResponseV1 {
     /// The request identifier.
     pub id: String,
     /// The user who proposed the request.
@@ -52,17 +71,17 @@ pub struct ActionRequestResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub intent_id: Option<String>,
     /// Current status.
-    pub status: ActionRequestStatus,
+    pub status: ActionRequestStatusDtoV1,
     /// Creation time, Unix seconds.
     pub created_at: u64,
     /// Approval decisions recorded for this request.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub decisions: Vec<ApprovalDecisionResponse>,
+    pub decisions: Vec<ApprovalDecisionDtoV1>,
 }
 
 /// An approval or rejection decision.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ApprovalDecisionResponse {
+pub struct ApprovalDecisionDtoV1 {
     /// The decision identifier.
     pub id: String,
     /// The user who made the decision.
@@ -76,7 +95,7 @@ pub struct ApprovalDecisionResponse {
     pub decided_at: u64,
 }
 
-impl From<piteka_storage::ApprovalDecision> for ApprovalDecisionResponse {
+impl From<piteka_storage::ApprovalDecision> for ApprovalDecisionDtoV1 {
     fn from(d: piteka_storage::ApprovalDecision) -> Self {
         Self {
             id: d.decision_id,
@@ -90,7 +109,7 @@ impl From<piteka_storage::ApprovalDecision> for ApprovalDecisionResponse {
 
 /// Request body for proposing a new action request.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CreateActionRequestRequest {
+pub struct CreateActionRequestRequestV1 {
     /// The user proposing the action.
     pub requested_by: String,
     /// Parwana intent digest (lower-case hex), if already constructed.
@@ -100,7 +119,7 @@ pub struct CreateActionRequestRequest {
 
 /// Request body for approving an action request.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ApproveRequest {
+pub struct ApproveActionRequestRequestV1 {
     /// The approver's user id.
     pub approver_id: String,
     /// The intent digest the approver reviewed (must match the request's intent).
@@ -112,7 +131,7 @@ pub struct ApproveRequest {
 
 /// Request body for rejecting an action request.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RejectRequest {
+pub struct RejectActionRequestRequestV1 {
     /// The approver's user id.
     pub approver_id: String,
     /// The intent digest the approver reviewed.
@@ -124,7 +143,7 @@ pub struct RejectRequest {
 
 /// Request body for revoking an approved action request.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RevokeRequest {
+pub struct RevokeActionRequestRequestV1 {
     /// The approver's user id.
     pub approver_id: String,
     /// The expected version for optimistic concurrency (CAS).
@@ -139,7 +158,7 @@ pub struct RevokeRequest {
 
 /// A row in the receipts list.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ReceiptSummary {
+pub struct ReceiptSummaryDtoV1 {
     /// Receipt identifier (lower-case hex).
     pub receipt_id: String,
     /// The mandate this receipt is about.
@@ -152,7 +171,7 @@ pub struct ReceiptSummary {
 
 /// Full receipt projection with its evidence references.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ReceiptDetail {
+pub struct ReceiptResponseV1 {
     /// Receipt identifier (lower-case hex).
     pub receipt_id: String,
     /// The mandate this receipt is about.
@@ -175,7 +194,7 @@ pub struct ReceiptDetail {
 
 /// A mandate projection.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MandateDetail {
+pub struct MandateResponseV1 {
     /// Mandate identifier (lower-case hex).
     pub mandate_id: String,
     /// Projected state label (for example `reserved`, `consumed`).
@@ -186,7 +205,7 @@ pub struct MandateDetail {
 
 /// One audit-log step in a mandate's chain, chronological.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChainStep {
+pub struct MandateChainStepDtoV1 {
     /// Event time, Unix seconds.
     pub at: i64,
     /// Acting identity, if any.
@@ -201,7 +220,7 @@ pub struct ChainStep {
 
 /// An execution attempt in a mandate's chain.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChainAttempt {
+pub struct MandateChainAttemptDtoV1 {
     /// Attempt identifier (lower-case hex).
     pub attempt_id: String,
     /// Executor service identity.
@@ -217,7 +236,7 @@ pub struct ChainAttempt {
 
 /// A structured evidence node referenced by a receipt in the chain.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChainEvidence {
+pub struct MandateChainEvidenceDtoV1 {
     /// Content-addressed node identifier.
     pub node_id: String,
     /// Registered node type (claim, observation, attestation, gap).
@@ -235,15 +254,15 @@ pub struct ChainEvidence {
 /// The assembled accountability chain for one mandate: authority → action →
 /// provider deployment → receipt → evidence, with the audit timeline.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MandateChain {
+pub struct MandateChainResponseV1 {
     /// The mandate at the root of the chain.
-    pub mandate: MandateDetail,
+    pub mandate: MandateResponseV1,
     /// The audit timeline, chronological.
-    pub timeline: Vec<ChainStep>,
+    pub timeline: Vec<MandateChainStepDtoV1>,
     /// Execution attempts against this mandate.
-    pub attempts: Vec<ChainAttempt>,
+    pub attempts: Vec<MandateChainAttemptDtoV1>,
     /// Receipts produced for this mandate.
-    pub receipts: Vec<ReceiptDetail>,
+    pub receipts: Vec<ReceiptResponseV1>,
     /// Evidence nodes referenced by those receipts.
-    pub evidence: Vec<ChainEvidence>,
+    pub evidence: Vec<MandateChainEvidenceDtoV1>,
 }

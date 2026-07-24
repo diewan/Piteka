@@ -40,15 +40,27 @@ async fn agent_overreach_is_rejected_fail_closed_and_leaves_the_mandate_usable()
     // Propose + human-approve the exact authorized deployment.
     agent.request_deployment(&plan).await.expect("propose");
     let intent_id = plan.intent_id(TENANT);
-    let mandate_id = human_approve(backend.ports(), "demo-approver", &plan.request_id, &intent_id)
-        .await
-        .expect("approve");
+    let mandate_id = human_approve(
+        backend.ports(),
+        "demo-approver",
+        &plan.request_id,
+        &intent_id,
+    )
+    .await
+    .expect("approve");
 
     // Overreach 1 — a commit SHA the approver never reviewed, presented under
     // the approved intent id. The server recomputes from the actual SHA and
     // rejects; nothing is dispatched.
     let wrong_sha = agent
-        .execute_raw(&plan.request_id, &mandate_id, REPO_ID, OVERREACH_SHA, ENV_ID, &intent_id)
+        .execute_raw(
+            &plan.request_id,
+            &mandate_id,
+            REPO_ID,
+            OVERREACH_SHA,
+            ENV_ID,
+            &intent_id,
+        )
         .await
         .expect_err("wrong-sha overreach must be rejected");
     assert_eq!(wrong_sha.code, "INTENT_MISMATCH");
@@ -56,7 +68,11 @@ async fn agent_overreach_is_rejected_fail_closed_and_leaves_the_mandate_usable()
     let details = wrong_sha.details.expect("mismatch carries details");
     assert_eq!(details["supplied_intent_id"], intent_id);
     assert_ne!(details["computed_intent_id"], serde_json::Value::Null);
-    assert_eq!(calls.load(Ordering::SeqCst), 0, "no dispatch on sha overreach");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "no dispatch on sha overreach"
+    );
 
     // Overreach 2 — an environment outside the mandate. Environment is part of
     // the intent, so this too fails the recompute. No dispatch.
@@ -72,11 +88,22 @@ async fn agent_overreach_is_rejected_fail_closed_and_leaves_the_mandate_usable()
         .await
         .expect_err("wrong-environment overreach must be rejected");
     assert_eq!(wrong_env.code, "INTENT_MISMATCH");
-    assert_eq!(calls.load(Ordering::SeqCst), 0, "no dispatch on env overreach");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "no dispatch on env overreach"
+    );
 
     // The mandate was never consumed by the rejected overreach attempts: the
     // honest, authorized deployment still executes exactly once.
-    let ok = agent.execute(&plan, &mandate_id).await.expect("honest execute still works");
+    let ok = agent
+        .execute(&plan, &mandate_id)
+        .await
+        .expect("honest execute still works");
     assert_eq!(ok["dispatched"], true);
-    assert_eq!(calls.load(Ordering::SeqCst), 1, "exactly one honest dispatch");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "exactly one honest dispatch"
+    );
 }

@@ -393,14 +393,21 @@ pub enum WebhookSignatureResult {
     Invalid,
 }
 
-/// The result of creating a deployment via the GitHub Deployments API.
+/// The GitHub Deployments API's reply to a create-deployment call.
+///
+/// `Response` is deliberate: everything here is what GitHub told us, not
+/// something Piteka established. It is not named `DeploymentCreated`, which
+/// reads as an `Event` — an immutable statement that a named transition was
+/// emitted — and would claim more than one API reply can prove. Whether the
+/// deployment actually happened is settled later, by a receipt that may honestly
+/// report `Unknown`.
 ///
 /// E-04: The `deployment_id` is the GitHub-assigned ID returned from the
 /// Deployments API response. It is the stable reference used for webhook
 /// correlation and reconciliation. The `attempt_digest` binds the Piteka-side
 /// execution attempt to the GitHub-side deployment record.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DeploymentCreated {
+pub struct DeploymentCreationResponse {
     /// The GitHub-assigned deployment ID.
     pub deployment_id: u64,
     /// The GitHub deployment URL.
@@ -485,7 +492,7 @@ pub trait GitHubAppPort: Send + Sync {
     ///
     /// E-04: The `attempt_digest` is incorporated into the GitHub deployment
     /// payload so that incoming webhooks can be correlated back to the
-    /// Piteka execution attempt. The returned [`DeploymentCreated`] includes
+    /// Piteka execution attempt. The returned [`DeploymentCreationResponse`] includes
     /// this digest for storage in the attempt record.
     ///
     /// # Parameters
@@ -512,7 +519,7 @@ pub trait GitHubAppPort: Send + Sync {
         auto_merge: bool,
         payload_commitment: &str,
         attempt_digest: [u8; 32],
-    ) -> Result<DeploymentCreated, GitHubAppError>;
+    ) -> Result<DeploymentCreationResponse, GitHubAppError>;
 
     /// Returns the stable IDs configured for this GitHub App installation.
     ///

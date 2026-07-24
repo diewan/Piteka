@@ -9,16 +9,16 @@ use crate::evidence::LocalEvidenceStore;
 use crate::memory::{
     InMemoryAuditLog, InMemoryExecutionAttemptStore, InMemoryInvestigatorCaseStore,
     InMemoryMandateProjectionStore, InMemoryProtocolObjectStore, InMemoryReceiptProjectionStore,
-    InMemoryWebhookReceiptStore,
+    InMemoryWebhookDeliveryStore,
 };
 use crate::model::{
     AuditEvent, CasOutcome, EvidenceDescriptor, ExecutionAttempt, ExecutionAttemptState,
-    InvestigatorCase, ProtocolObjectRecord, ReceiptOutcome, ReceiptProjection, WebhookReceipt,
-    WebhookRecordOutcome,
+    InvestigatorCase, ProtocolObjectRecord, ReceiptOutcome, ReceiptProjection,
+    WebhookDeliveryRecord, WebhookRecordOutcome,
 };
 use crate::ports::{
     AuditLog, EvidenceObjectStore, ExecutionAttemptStore, InvestigatorCaseStore,
-    MandateProjectionStore, ProtocolObjectStore, ReceiptProjectionStore, WebhookReceiptStore,
+    MandateProjectionStore, ProtocolObjectStore, ReceiptProjectionStore, WebhookDeliveryStore,
 };
 
 fn scope(id: &str) -> crate::TenantScope {
@@ -277,8 +277,8 @@ async fn mandate_cas_reports_missing() {
 
 #[tokio::test]
 async fn webhook_deliveries_are_unique_and_idempotent() {
-    let store = InMemoryWebhookReceiptStore::default();
-    let receipt = WebhookReceipt {
+    let store = InMemoryWebhookDeliveryStore::default();
+    let receipt = WebhookDeliveryRecord {
         delivery_id: "delivery-123".to_string(),
         source: "github".to_string(),
         raw_digest: ContentDigest::of(b"payload"),
@@ -708,4 +708,65 @@ async fn execution_attempt_state_terminal_check() {
     assert!(ExecutionAttemptState::ReconciledAccepted.is_terminal());
     assert!(ExecutionAttemptState::ReconciledNotAccepted.is_terminal());
     assert!(ExecutionAttemptState::AbandonedAmbiguous.is_terminal());
+}
+
+// ── NAM-02 rename compatibility ─────────────────────────────────────────────
+//
+// NAM-02 renamed `WebhookReceipt` to `WebhookDeliveryRecord` (and its store
+// traits with it) so a transport deduplication row stops borrowing the
+// protocol's reserved `Receipt` vocabulary. Nothing about the stored data
+// changed: no table, column, or discriminator value moved, so there is no
+// forward or backward migration and rollback is a source-level revert.
+
+/// The rename is source-only: the SQL emitted by the Postgres store still names
+/// the `webhook_receipts` table and its original columns.
+#[test]
+fn webhook_delivery_rename_did_not_move_the_table_or_columns() {
+    let sql = include_str!("postgres.rs");
+    assert!(
+        sql.contains(
+            "INSERT INTO webhook_receipts (tenant_id, delivery_id, source, raw_digest, received_at)"
+        ),
+        "the webhook_receipts insert must keep its table and column names"
+    );
+    assert!(
+        sql.contains("FROM webhook_receipts WHERE tenant_id = $1 AND delivery_id = $2"),
+        "the webhook_receipts lookup must keep its table and predicate"
+    );
+
+    // The migration that created the table is unchanged; no NAM-02 migration exists.
+    let migration = include_str!("../../../migrations/0001_init.sql");
+    assert!(migration.contains("webhook_receipts"));
+}
+
+/// A delivery record round-trips through the renamed in-memory store with every
+/// field intact, and a repeat delivery id is still reported as a duplicate
+/// rather than silently overwriting the retained raw digest.
+#[tokio::test]
+async fn webhook_delivery_record_round_trips_and_still_deduplicates() {
+    let store = InMemoryWebhookDeliveryStore::default();
+    let tenant = scope("tenant-a");
+    let record = WebhookDeliveryRecord {
+        delivery_id: "delivery-nam02".to_string(),
+        source: "github".to_string(),
+        raw_digest: ContentDigest::of(b"payload"),
+        received_at_unix_seconds: 1_700_000_000,
+    };
+
+    assert_eq!(
+        store.record(&tenant, record.clone()).await.unwrap(),
+        WebhookRecordOutcome::Recorded
+    );
+    assert_eq!(
+        store.record(&tenant, record.clone()).await.unwrap(),
+        WebhookRecordOutcome::Duplicate,
+        "a repeat delivery id must stay idempotent after the rename"
+    );
+
+    let found = store
+        .get(&tenant, "delivery-nam02")
+        .await
+        .unwrap()
+        .expect("recorded delivery must be readable");
+    assert_eq!(found, record);
 }

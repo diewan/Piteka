@@ -80,9 +80,15 @@ impl From<crate::dispatch::ReplayRejection> for McpError {
     }
 }
 
+/// Untrusted, not-yet-normalized arguments for `piteka_request_deployment`.
+///
+/// `Input` is the reserved role for agent-supplied values that have not been
+/// validated: nothing here is authoritative until [`validate_intent`] recomputes
+/// the intent id server-side. The JSON field names are the MCP tool contract and
+/// are unchanged by this type's name.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RequestDeployment {
+pub struct RequestDeploymentInput {
     pub request_id: String,
     pub repository_id: u64,
     pub commit_sha: String,
@@ -90,15 +96,26 @@ pub struct RequestDeployment {
     pub intent_id: String,
 }
 
+/// An untrusted object identifier supplied by an MCP caller.
+///
+/// Deliberately not named `ObjectRef`: `Ref` is reserved for a validated
+/// lightweight locator, and this is a raw caller-controlled string that every
+/// tool must still validate and tenant-scope before use.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ObjectRef {
+pub struct ObjectIdInput {
     pub id: String,
 }
 
+/// Untrusted, not-yet-normalized arguments for
+/// `piteka_execute_approved_deployment`.
+///
+/// The supplied `intent_id` is a claim, not authority: it is accepted only after
+/// the server recomputes the intent id from the stable provider parameters and
+/// finds an exact match.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ExecuteDeployment {
+pub struct ExecuteDeploymentInput {
     pub request_id: String,
     pub mandate_id: String,
     pub repository_id: u64,
@@ -119,13 +136,13 @@ pub trait AccountabilityTools: Send + Sync {
     async fn request_deployment(
         &self,
         identity: &McpIdentity,
-        input: RequestDeployment,
+        input: RequestDeploymentInput,
     ) -> Result<Value, McpError>;
     async fn get_action_status(&self, identity: &McpIdentity, id: &str) -> Result<Value, McpError>;
     async fn execute_approved_deployment(
         &self,
         identity: &McpIdentity,
-        input: ExecuteDeployment,
+        input: ExecuteDeploymentInput,
     ) -> Result<Value, McpError>;
     async fn get_receipt(&self, identity: &McpIdentity, id: &str) -> Result<Value, McpError>;
     async fn export_dispute_bundle(
@@ -153,7 +170,7 @@ pub async fn call_tool<B: AccountabilityTools>(
     }
     let response = match name {
         "piteka_request_deployment" => {
-            let input: RequestDeployment = decode(arguments)?;
+            let input: RequestDeploymentInput = decode(arguments)?;
             validate_deployment_fields(
                 &input.request_id,
                 input.repository_id,
@@ -172,12 +189,12 @@ pub async fn call_tool<B: AccountabilityTools>(
             backend.request_deployment(identity, input).await
         }
         "piteka_get_action_status" => {
-            let input: ObjectRef = decode(arguments)?;
+            let input: ObjectIdInput = decode(arguments)?;
             validate_object_id(&input.id)?;
             backend.get_action_status(identity, &input.id).await
         }
         "piteka_execute_approved_deployment" => {
-            let input: ExecuteDeployment = decode(arguments)?;
+            let input: ExecuteDeploymentInput = decode(arguments)?;
             validate_deployment_fields(
                 &input.request_id,
                 input.repository_id,
@@ -202,17 +219,17 @@ pub async fn call_tool<B: AccountabilityTools>(
             backend.execute_approved_deployment(identity, input).await
         }
         "piteka_get_receipt" => {
-            let input: ObjectRef = decode(arguments)?;
+            let input: ObjectIdInput = decode(arguments)?;
             validate_object_id(&input.id)?;
             backend.get_receipt(identity, &input.id).await
         }
         "piteka_export_dispute_bundle" => {
-            let input: ObjectRef = decode(arguments)?;
+            let input: ObjectIdInput = decode(arguments)?;
             validate_object_id(&input.id)?;
             backend.export_dispute_bundle(identity, &input.id).await
         }
         "piteka_verify_bundle" => {
-            let input: ObjectRef = decode(arguments)?;
+            let input: ObjectIdInput = decode(arguments)?;
             validate_object_id(&input.id)?;
             backend.verify_bundle(identity, &input.id).await
         }

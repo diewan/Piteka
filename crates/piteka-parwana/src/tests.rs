@@ -5,7 +5,7 @@ use super::{
     verify_contract_versions,
 };
 use crate::protocol::{
-    AccountabilityObjectKind, ActionIntent, ActionIntentWire, GitHubDeploymentIntentV1,
+    AccountabilityObjectKind, ActionIntent, ActionIntentWireV1, GitHubDeploymentIntentV1,
     RequiredContexts,
 };
 
@@ -123,7 +123,7 @@ fn wire_intent_round_trips_and_stays_byte_identical() {
     let contract = ParwanaContract::bind().unwrap();
     let intent = valid_intent();
 
-    let wire = ActionIntentWire::from(&intent);
+    let wire = ActionIntentWireV1::from(&intent);
     let decoded = contract
         .decode_action_intent(wire)
         .expect("valid wire decodes");
@@ -138,7 +138,7 @@ fn wire_intent_round_trips_and_stays_byte_identical() {
 #[test]
 fn decode_rejects_a_tampered_deployment_profile() {
     let contract = ParwanaContract::bind().unwrap();
-    let mut wire = ActionIntentWire::from(&valid_intent());
+    let mut wire = ActionIntentWireV1::from(&valid_intent());
 
     // An agent-side tamper: swap in a different approved SHA's profile bytes while
     // leaving the committed target and parameters commitment untouched. The opaque
@@ -167,7 +167,7 @@ fn decode_rejects_a_tampered_deployment_profile() {
         tampered_profile.clone(),
     )
     .unwrap();
-    wire.profile_bytes_hex = ActionIntentWire::from(&alt).profile_bytes_hex;
+    wire.profile_bytes_hex = ActionIntentWireV1::from(&alt).profile_bytes_hex;
 
     match contract.decode_action_intent(wire) {
         Err(AdapterError::InvalidIntent(_)) => {}
@@ -178,7 +178,7 @@ fn decode_rejects_a_tampered_deployment_profile() {
 #[test]
 fn decode_rejects_noncanonical_profile_bytes() {
     let contract = ParwanaContract::bind().unwrap();
-    let mut wire = ActionIntentWire::from(&valid_intent());
+    let mut wire = ActionIntentWireV1::from(&valid_intent());
     // A trailing byte makes the profile encoding non-canonical; decode fails closed.
     wire.profile_bytes_hex.push_str("00");
 

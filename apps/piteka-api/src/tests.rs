@@ -760,3 +760,286 @@ fn openapi_spec_contains_required_paths() {
     assert!(spec.contains("reject"));
     assert!(spec.contains("revoke"));
 }
+
+// ── NAM-02 rename compatibility ─────────────────────────────────────────────
+//
+// The NAM-02 naming audit gave every `/api/v1` boundary shape an explicit role
+// and version suffix (`RequestV1` / `ResponseV1` / `DtoV1`). Those are Rust
+// identifiers only. The tests below pin the part that is a compatibility
+// surface — the serialized JSON keys and values, and the OpenAPI schema names
+// that describe them — so a future rename cannot quietly become a wire change.
+
+/// Every JSON key and value emitted by the renamed response types is byte-for-byte
+/// what it was before NAM-02. The expected literals below are the pre-rename
+/// contract; they are deliberately written out rather than derived.
+#[test]
+fn api_v1_json_is_unchanged_by_type_renames() {
+    use crate::models::{
+        ActionRequestResponseV1, ActionRequestStatusDtoV1, ActionRequestSummaryDtoV1,
+        ApprovalDecisionDtoV1, MandateChainAttemptDtoV1, MandateChainEvidenceDtoV1,
+        MandateChainResponseV1, MandateChainStepDtoV1, MandateResponseV1, ReceiptResponseV1,
+        ReceiptSummaryDtoV1,
+    };
+
+    let summary = ActionRequestSummaryDtoV1 {
+        id: "req-1".to_string(),
+        requested_by: "alice".to_string(),
+        status: ActionRequestStatusDtoV1::Pending,
+        created_at: 1_700_000_000,
+    };
+    assert_eq!(
+        serde_json::to_value(&summary).unwrap(),
+        serde_json::json!({
+            "id": "req-1",
+            "requested_by": "alice",
+            "status": "Pending",
+            "created_at": 1_700_000_000u64,
+        })
+    );
+
+    let decision = ApprovalDecisionDtoV1 {
+        id: "dec-1".to_string(),
+        decided_by: "bob".to_string(),
+        decision: "approved".to_string(),
+        intent_id: Some("ab".repeat(32)),
+        decided_at: 1_700_000_100,
+    };
+    let response = ActionRequestResponseV1 {
+        id: "req-1".to_string(),
+        requested_by: "alice".to_string(),
+        intent_id: Some("ab".repeat(32)),
+        status: ActionRequestStatusDtoV1::Approved,
+        created_at: 1_700_000_000,
+        decisions: vec![decision],
+    };
+    assert_eq!(
+        serde_json::to_value(&response).unwrap(),
+        serde_json::json!({
+            "id": "req-1",
+            "requested_by": "alice",
+            "intent_id": "ab".repeat(32),
+            "status": "Approved",
+            "created_at": 1_700_000_000u64,
+            "decisions": [{
+                "id": "dec-1",
+                "decided_by": "bob",
+                "decision": "approved",
+                "intent_id": "ab".repeat(32),
+                "decided_at": 1_700_000_100u64,
+            }],
+        })
+    );
+
+    // Optional fields still disappear rather than serializing as null.
+    let bare = ActionRequestResponseV1 {
+        id: "req-2".to_string(),
+        requested_by: "alice".to_string(),
+        intent_id: None,
+        status: ActionRequestStatusDtoV1::Rejected,
+        created_at: 1,
+        decisions: vec![],
+    };
+    let bare = serde_json::to_value(&bare).unwrap();
+    assert!(bare.get("intent_id").is_none(), "intent_id must be omitted");
+    assert!(bare.get("decisions").is_none(), "decisions must be omitted");
+    assert_eq!(bare["status"], "Rejected");
+
+    let chain = MandateChainResponseV1 {
+        mandate: MandateResponseV1 {
+            mandate_id: "cd".repeat(32),
+            state: "reserved".to_string(),
+            version: 3,
+        },
+        timeline: vec![MandateChainStepDtoV1 {
+            at: 5,
+            actor: None,
+            action: "dispatch".to_string(),
+            decision: "granted".to_string(),
+            detail: "d".to_string(),
+        }],
+        attempts: vec![MandateChainAttemptDtoV1 {
+            attempt_id: "ef".repeat(32),
+            executor_identity: "worker".to_string(),
+            state: "Accepted".to_string(),
+            github_deployment_id: Some(99),
+            started_at: 4,
+        }],
+        receipts: vec![ReceiptResponseV1 {
+            receipt_id: "01".repeat(32),
+            mandate_id: "cd".repeat(32),
+            intent_id: "ab".repeat(32),
+            attempt_id: "ef".repeat(32),
+            outcome: "unknown".to_string(),
+            created_at: 6,
+            dispatch_evidence_refs: vec!["n1".to_string()],
+            target_evidence_refs: vec![],
+            evidence_gaps: vec!["provider_status_unavailable".to_string()],
+        }],
+        evidence: vec![MandateChainEvidenceDtoV1 {
+            node_id: "02".repeat(32),
+            registry_id: "observation".to_string(),
+            source: "provider:github".to_string(),
+            producer_identity: "github".to_string(),
+            content_digest: "03".repeat(32),
+            media_type: "application/json".to_string(),
+        }],
+    };
+    let chain = serde_json::to_value(&chain).unwrap();
+    assert_eq!(
+        chain["mandate"],
+        serde_json::json!({"mandate_id": "cd".repeat(32), "state": "reserved", "version": 3})
+    );
+    assert_eq!(chain["timeline"][0]["action"], "dispatch");
+    // `actor` has no `skip_serializing_if`, so an absent actor is an explicit
+    // JSON null rather than a missing key. That is the pre-NAM-02 shape and is
+    // pinned here deliberately: "no recorded actor" must stay distinguishable
+    // from "field not present".
+    assert!(chain["timeline"][0]["actor"].is_null());
+    assert_eq!(chain["attempts"][0]["github_deployment_id"], 99);
+    // `unknown` is preserved verbatim; it is never upgraded to a success or failure.
+    assert_eq!(chain["receipts"][0]["outcome"], "unknown");
+    assert_eq!(
+        chain["receipts"][0]["evidence_gaps"][0],
+        "provider_status_unavailable"
+    );
+    assert_eq!(chain["evidence"][0]["registry_id"], "observation");
+
+    let receipt_summary = ReceiptSummaryDtoV1 {
+        receipt_id: "01".repeat(32),
+        mandate_id: "cd".repeat(32),
+        outcome: "succeeded".to_string(),
+        created_at: 6,
+    };
+    assert_eq!(
+        serde_json::to_value(&receipt_summary).unwrap(),
+        serde_json::json!({
+            "receipt_id": "01".repeat(32),
+            "mandate_id": "cd".repeat(32),
+            "outcome": "succeeded",
+            "created_at": 6,
+        })
+    );
+}
+
+/// The renamed request bodies still deserialize the same JSON keys, and still
+/// reject unknown ones where they did before.
+#[test]
+fn api_v1_request_bodies_accept_the_same_json_keys() {
+    use crate::models::{
+        ApproveActionRequestRequestV1, CreateActionRequestRequestV1, RejectActionRequestRequestV1,
+        RevokeActionRequestRequestV1,
+    };
+
+    let create: CreateActionRequestRequestV1 =
+        serde_json::from_value(serde_json::json!({"requested_by": "alice"})).unwrap();
+    assert_eq!(create.requested_by, "alice");
+    assert!(create.intent_id.is_none());
+
+    let approve: ApproveActionRequestRequestV1 = serde_json::from_value(
+        serde_json::json!({"approver_id": "bob", "intent_id": "ab", "version": 1}),
+    )
+    .unwrap();
+    assert_eq!(approve.approver_id, "bob");
+    assert_eq!(approve.version, 1);
+
+    let reject: RejectActionRequestRequestV1 =
+        serde_json::from_value(serde_json::json!({"approver_id": "bob", "version": 2})).unwrap();
+    assert_eq!(reject.version, 2);
+
+    let revoke: RevokeActionRequestRequestV1 =
+        serde_json::from_value(serde_json::json!({"approver_id": "bob", "version": 3})).unwrap();
+    assert_eq!(revoke.version, 3);
+}
+
+/// The error envelope is part of the v1 contract; renaming its Rust types must
+/// not move a key or change a code.
+#[test]
+fn api_v1_error_envelope_is_unchanged_by_type_renames() {
+    use crate::error::ApiError;
+    use axum::response::IntoResponse;
+
+    let response = ApiError::not_found("action request", "req-1").into_response();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let rendered = serde_json::to_value(crate::error::ErrorResponseV1 {
+        error: crate::error::ErrorDetailDtoV1 {
+            code: "NOT_FOUND".to_string(),
+            message: "action request `req-1` not found".to_string(),
+            causes: Some(vec![crate::error::ErrorCauseDtoV1 {
+                code: "NOT_FOUND".to_string(),
+                message: "action request `req-1` not found".to_string(),
+                source: Some("id".to_string()),
+            }]),
+        },
+    })
+    .unwrap();
+    assert_eq!(
+        rendered,
+        serde_json::json!({
+            "error": {
+                "code": "NOT_FOUND",
+                "message": "action request `req-1` not found",
+                "causes": [{
+                    "code": "NOT_FOUND",
+                    "message": "action request `req-1` not found",
+                    "source": "id",
+                }],
+            }
+        })
+    );
+}
+
+/// The checked-in OpenAPI contract names the same schemas the Rust types now
+/// declare, and every `$ref` still resolves (constitution §4: "Schema titles and
+/// generated type names agree").
+#[test]
+fn openapi_schema_names_match_the_versioned_rust_types() {
+    let spec = crate::OPENAPI_SPEC;
+    for schema in [
+        "ActionRequestStatusDtoV1",
+        "ActionRequestSummaryDtoV1",
+        "ActionRequestResponseV1",
+        "ApprovalDecisionDtoV1",
+        "CreateActionRequestRequestV1",
+        "ApproveActionRequestRequestV1",
+        "RejectActionRequestRequestV1",
+        "RevokeActionRequestRequestV1",
+        "ErrorResponseV1",
+        "ErrorDetailDtoV1",
+        "ErrorCauseDtoV1",
+    ] {
+        assert!(
+            spec.contains(&format!("    {schema}:")),
+            "openapi.yaml is missing schema `{schema}`"
+        );
+        assert!(
+            spec.contains(&format!("#/components/schemas/{schema}")),
+            "openapi.yaml never references schema `{schema}`"
+        );
+    }
+
+    // The original v1 component names remain as deprecated aliases so generated
+    // clients and external documents can continue resolving them.
+    for (legacy, replacement) in [
+        ("ActionRequestStatus", "ActionRequestStatusDtoV1"),
+        ("ActionRequestSummary", "ActionRequestSummaryDtoV1"),
+        ("ActionRequestResponse", "ActionRequestResponseV1"),
+        ("ApprovalDecisionResponse", "ApprovalDecisionDtoV1"),
+        ("CreateActionRequestRequest", "CreateActionRequestRequestV1"),
+        ("ApproveRequest", "ApproveActionRequestRequestV1"),
+        ("RejectRequest", "RejectActionRequestRequestV1"),
+        ("RevokeRequest", "RevokeActionRequestRequestV1"),
+        ("ErrorResponse", "ErrorResponseV1"),
+        ("ErrorDetail", "ErrorDetailDtoV1"),
+        ("ErrorCause", "ErrorCauseDtoV1"),
+    ] {
+        assert!(
+            spec.contains(&format!("    {legacy}:")),
+            "openapi.yaml dropped compatibility schema `{legacy}`"
+        );
+        assert!(
+            spec.contains(&format!("#/components/schemas/{replacement}")),
+            "compatibility schema `{legacy}` has no replacement `{replacement}`"
+        );
+    }
+}

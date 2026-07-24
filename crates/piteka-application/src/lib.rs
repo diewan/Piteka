@@ -32,23 +32,25 @@ mod reconciliation_tests;
 mod session_tests;
 
 pub use action_request::{
-    ActionRequestPorts, ActionRequestUseCase, ActionRequestUseCaseError, Approved, Proposed,
-    Rejected, Revoked,
+    ActionRequestPorts, ActionRequestUseCase, ActionRequestUseCaseError,
+    ApproveActionRequestResult, ProposeActionRequestResult, RejectActionRequestResult,
+    RevokeActionRequestResult,
 };
 pub use anchor::{AnchorUseCase, AnchorUseCaseError};
 pub use authz::{ActionSensitivity, AuthorizationRequest, Denial, ReauthPolicy};
 pub use cases::{CaseUseCase, CaseUseCaseError};
 pub use dispatch::{
-    DispatchError, DispatchOutcome, DispatchPorts, DispatchUseCase, Dispatched, ReservationFailed,
+    DispatchError, DispatchOutcome, DispatchPorts, DispatchUseCase, DispatchedExecution,
+    ReservationConflict,
 };
 pub use hardening::{
-    ApprovalCeremony, ApprovalCeremonyError, ApprovalChallenge, ApprovalProof, AuditSink,
-    CanonicalIntent, IntentBindingError, KeyPurpose, KeyStatus, ManagedKeyId, ManagedSignature,
-    ProductionSigner, SigningError, WorkerCapability, WorkerCapabilityError,
+    ApprovalCeremony, ApprovalCeremonyError, ApprovalCeremonyIntent, ApprovalChallenge,
+    ApprovalProof, AuditSink, IntentBindingError, KeyPurpose, KeyStatus, ManagedKeyId,
+    ManagedSignature, ProductionSigner, SigningError, WorkerCapability, WorkerCapabilityError,
 };
 pub use observation::{
-    EvidenceGap, Observation, ObservationError, ObservationPort, ObservationQuery,
-    ObservationQueryResult, ObservationUseCase, SourceHealth,
+    EvidenceGap, ObservationError, ObservationPort, ObservationQuery, ObservationQueryResult,
+    ObservationSourceHealth, ObservationUseCase, TuppiraObservation,
 };
 pub use receipt_production::{
     DeploymentStatusEvent, ReceiptProducingProcessor, ReceiptProductionError,

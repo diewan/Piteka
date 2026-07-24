@@ -17,7 +17,7 @@ use tower_service::Service;
 
 #[test]
 fn approval_summary_has_one_visible_and_submitted_digest_with_accessible_context() {
-    let summary = crate::ApprovalSummary::new(piteka_application::CanonicalIntent {
+    let summary = crate::ApprovalSummary::new(piteka_application::ApprovalCeremonyIntent {
         tenant_id: "tenant-a".into(),
         request_id: "request-1".into(),
         environment: "production".into(),
@@ -29,6 +29,37 @@ fn approval_summary_has_one_visible_and_submitted_digest_with_accessible_context
     assert!(html.contains("aria-labelledby=\"approval-context-title\""));
     assert!(html.contains("aria-describedby=\"intent-digest\""));
     assert!(html.contains("acme/&lt;service&gt;"));
+}
+
+/// NAM-02 user-language change: the approval-ceremony digest is labelled
+/// "Approval digest", not "Intent digest".
+///
+/// The value rendered here is `ApprovalCeremonyIntent::digest_hex` — a
+/// Piteka-local binding over the displayed fields. Labelling it "Intent digest"
+/// invited an operator to read it as the Parwana intent id, which is a different
+/// value carrying different authority. The element id and the submitted form
+/// field name are unchanged, so this is a label change only, with no effect on
+/// what the browser posts back.
+#[test]
+fn approval_digest_is_not_labelled_as_a_protocol_intent_digest() {
+    let summary = crate::ApprovalSummary::new(piteka_application::ApprovalCeremonyIntent {
+        tenant_id: "tenant-a".into(),
+        request_id: "request-1".into(),
+        environment: "production".into(),
+        repository: "acme/service".into(),
+        revision: "abc123".into(),
+    });
+    let html = summary.render_security_context();
+
+    assert!(html.contains("<dt>Approval digest</dt>"));
+    assert!(
+        !html.contains("<dt>Intent digest</dt>"),
+        "the ceremony digest must not be presented as the Parwana intent digest"
+    );
+
+    // Unchanged: the anchor the hidden input describes, and the posted field name.
+    assert!(html.contains("id=\"intent-digest\""));
+    assert!(html.contains("name=\"displayed_intent_digest\""));
 }
 
 #[test]
@@ -700,4 +731,99 @@ async fn pages_include_limitations_strip() {
     // Limitations strip must be present on every receipt/detail page
     assert!(body.contains("pk-limitations-strip"));
     assert!(body.contains("What this record does not establish"));
+}
+
+/// The approval panel never invents deployment parameters.
+///
+/// `ActionRequest` records the request id, requester, status, creation time, and
+/// the Parwana intent id. It does not record the repository, commit, environment,
+/// or task — those live in the canonical `ActionIntent`, which this read path does
+/// not load. The panel used to fill them with fixed strings ("diewan/demo-app",
+/// "production") and render the intent id under a "Commit" label, showing an
+/// approver deployment parameters no stored record supported. Charter §8 forbids
+/// simulated intents; on an approval screen it is also the approval-UI integrity
+/// threat, where the display must never disagree with what is signed.
+#[tokio::test]
+async fn approval_panel_shows_unrecorded_parameters_as_unrecorded() {
+    let mut app = combined_router();
+
+    let intent_id = "a3f9c2b1d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1";
+    let create = Request::builder()
+        .method("POST")
+        .uri("/api/v1/action-requests")
+        .header("content-type", "application/json")
+        .header("X-Tenant-Id", "demo")
+        .body(Body::from(
+            serde_json::json!({
+                "requested_by": "agent@example.com",
+                "intent_id": intent_id,
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = app.call(create).await.expect("call failed");
+    let request_id: String = {
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        body["id"].as_str().unwrap().to_string()
+    };
+
+    let request = Request::builder()
+        .method("GET")
+        .uri(&format!("/request/{request_id}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.call(request).await.expect("call failed");
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+
+    // What Piteka actually recorded is shown.
+    assert!(
+        body.contains(intent_id),
+        "the recorded intent id must be displayed"
+    );
+    assert!(body.contains("Intent fingerprint"));
+
+    // What it did not record is shown as absent, not guessed.
+    assert!(
+        body.matches("Not recorded in this view").count() >= 4,
+        "repository, commit, environment, and task must each declare themselves unrecorded"
+    );
+
+    // No fabricated deployment parameters survive anywhere in the page.
+    for invented in [
+        "diewan/demo-app",
+        "demo-app",
+        "Artifact attestation present",
+    ] {
+        assert!(
+            !body.contains(invented),
+            "the approval panel still renders the invented value `{invented}`"
+        );
+    }
+
+    // The intent id must never be presented as a commit SHA. It appears only
+    // under the intent fingerprint, where the copy label names it correctly.
+    assert!(
+        !body.contains(&format!("Copy commit SHA {intent_id}")),
+        "the intent id must never be labelled as a commit SHA"
+    );
+
+    // The fixed profile controls stay, and are labelled as profile constants
+    // rather than as this request's data.
+    assert!(body.contains("Deployment controls"));
+    assert!(body.contains("profile constants, not values read from this request"));
+    assert!(
+        !body.contains("Gate-policy fingerprint"),
+        "an intent id must not be displayed under a gate-policy label"
+    );
 }

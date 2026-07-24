@@ -16,6 +16,12 @@ servers:
 tags:
   - name: action-requests
     description: Action request lifecycle
+  - name: read-model
+    description: >
+      Read-only projections of Piteka's live state, served for investigation and
+      for the Hemion developer console. These are derived views, not authority:
+      a consumer that needs a verdict recomputes it against the Parwana verifier
+      rather than trusting a field here.
 
 paths:
   /api/v1/action-requests:
@@ -33,13 +39,13 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: "#/components/schemas/ActionRequestSummary"
+                  $ref: "#/components/schemas/ActionRequestSummaryDtoV1"
         "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ErrorResponseV1"
 
     post:
       tags:
@@ -59,32 +65,32 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/CreateActionRequestRequest"
+              $ref: "#/components/schemas/CreateActionRequestRequestV1"
       responses:
         "201":
           description: Action request created
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ActionRequestResponse"
+                $ref: "#/components/schemas/ActionRequestResponseV1"
         "400":
           description: Bad request
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ErrorResponseV1"
         "409":
           description: Idempotency key conflict
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ErrorResponseV1"
         "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ErrorResponseV1"
 
   /api/v1/action-requests/{id}:
     get:
@@ -106,19 +112,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ActionRequestResponse"
+                $ref: "#/components/schemas/ActionRequestResponseV1"
         "404":
           description: Action request not found
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ErrorResponseV1"
         "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ErrorResponseV1"
 
   /api/v1/action-requests/{id}/approve:
     post:
@@ -147,38 +153,38 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ApproveRequest"
+              $ref: "#/components/schemas/ApproveActionRequestRequestV1"
       responses:
         "200":
           description: Action request approved
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ActionRequestResponse"
+                $ref: "#/components/schemas/ActionRequestResponseV1"
         "400":
           description: Bad request
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ErrorResponseV1"
         "404":
           description: Action request not found
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ErrorResponseV1"
         "409":
-          description: Conflict: invalid state or version
+          description: "Conflict: invalid state or version"
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ErrorResponseV1"
         "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ErrorResponseV1"
 
   /api/v1/action-requests/{id}/reject:
     post:
@@ -207,38 +213,38 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/RejectRequest"
+              $ref: "#/components/schemas/RejectActionRequestRequestV1"
       responses:
         "200":
           description: Action request rejected
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ActionRequestResponse"
+                $ref: "#/components/schemas/ActionRequestResponseV1"
         "400":
           description: Bad request
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ErrorResponseV1"
         "404":
           description: Action request not found
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ErrorResponseV1"
         "409":
-          description: Conflict: invalid state or version
+          description: "Conflict: invalid state or version"
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ErrorResponseV1"
         "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ErrorResponseV1"
 
   /api/v1/action-requests/{id}/revoke:
     post:
@@ -267,42 +273,206 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/RevokeRequest"
+              $ref: "#/components/schemas/RevokeActionRequestRequestV1"
       responses:
         "200":
           description: Action request revoked
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ActionRequestResponse"
+                $ref: "#/components/schemas/ActionRequestResponseV1"
         "400":
           description: Bad request
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ErrorResponseV1"
         "404":
           description: Action request not found
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ErrorResponseV1"
         "409":
-          description: Conflict: invalid state or version
+          description: "Conflict: invalid state or version"
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ErrorResponseV1"
         "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ErrorResponseV1"
+
+  /api/v1/receipts:
+    get:
+      tags:
+        - read-model
+      summary: List receipt projections, newest first
+      operationId: listReceipts
+      responses:
+        "200":
+          description: Receipt summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ReceiptSummaryDtoV1"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponseV1"
+
+  /api/v1/receipts/{id}:
+    get:
+      tags:
+        - read-model
+      summary: One receipt projection with its evidence references
+      operationId: getReceipt
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Lower-case hex object identifier
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The receipt projection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReceiptResponseV1"
+        "404":
+          description: Receipt not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponseV1"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponseV1"
+
+  /api/v1/receipts/{id}/export:
+    get:
+      tags:
+        - read-model
+      summary: Export the receipt's evidence manifest
+      description: >
+        Returns the content-addressed export manifest for offline verification by
+        the Parwana CLI. The manifest is opaque to this API: its shape is defined
+        by the pinned Parwana contract, not by Piteka.
+      operationId: exportReceipt
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Lower-case hex object identifier
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Export manifest bytes
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Parwana-defined export manifest; not a Piteka-owned shape.
+                additionalProperties: true
+        "404":
+          description: Receipt not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponseV1"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponseV1"
+
+  /api/v1/mandates/{id}:
+    get:
+      tags:
+        - read-model
+      summary: One mandate projection
+      operationId: getMandate
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Lower-case hex object identifier
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The mandate projection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MandateResponseV1"
+        "404":
+          description: Mandate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponseV1"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponseV1"
+
+  /api/v1/mandates/{id}/chain:
+    get:
+      tags:
+        - read-model
+      summary: The assembled accountability chain for one mandate
+      description: >
+        Authority to action to provider deployment to receipt to evidence, with
+        the audit timeline. Evidence gaps are reported explicitly; an absent
+        entry never implies the action did not occur.
+      operationId: getMandateChain
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Lower-case hex object identifier
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The accountability chain
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MandateChainResponseV1"
+        "404":
+          description: Mandate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponseV1"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponseV1"
 
 components:
   schemas:
-    ActionRequestStatus:
+    ActionRequestStatusDtoV1:
       type: string
       enum:
         - Pending
@@ -311,7 +481,7 @@ components:
         - Revoked
       description: The current status of an action request.
 
-    ActionRequestSummary:
+    ActionRequestSummaryDtoV1:
       type: object
       required:
         - id
@@ -326,13 +496,13 @@ components:
           type: string
           description: The user who proposed the request.
         status:
-          $ref: "#/components/schemas/ActionRequestStatus"
+          $ref: "#/components/schemas/ActionRequestStatusDtoV1"
         created_at:
           type: integer
           format: int64
           description: Creation time, Unix seconds.
 
-    ActionRequestResponse:
+    ActionRequestResponseV1:
       type: object
       required:
         - id
@@ -350,7 +520,7 @@ components:
           type: string
           description: Parwana intent digest (lower-case hex), if already constructed.
         status:
-          $ref: "#/components/schemas/ActionRequestStatus"
+          $ref: "#/components/schemas/ActionRequestStatusDtoV1"
         created_at:
           type: integer
           format: int64
@@ -358,10 +528,10 @@ components:
         decisions:
           type: array
           items:
-            $ref: "#/components/schemas/ApprovalDecisionResponse"
+            $ref: "#/components/schemas/ApprovalDecisionDtoV1"
           description: Approval decisions recorded for this request.
 
-    ApprovalDecisionResponse:
+    ApprovalDecisionDtoV1:
       type: object
       required:
         - id
@@ -377,7 +547,7 @@ components:
           description: The user who made the decision.
         decision:
           type: string
-          description: `approved` or `rejected`.
+          description: "`approved` or `rejected`."
         intent_id:
           type: string
           description: The intent digest the approver reviewed.
@@ -386,7 +556,7 @@ components:
           format: int64
           description: Decision time, Unix seconds.
 
-    CreateActionRequestRequest:
+    CreateActionRequestRequestV1:
       type: object
       required:
         - requested_by
@@ -398,7 +568,7 @@ components:
           type: string
           description: Parwana intent digest (lower-case hex), if already constructed.
 
-    ApproveRequest:
+    ApproveActionRequestRequestV1:
       type: object
       required:
         - approver_id
@@ -415,7 +585,7 @@ components:
           format: int64
           description: The expected version for optimistic concurrency (CAS).
 
-    RejectRequest:
+    RejectActionRequestRequestV1:
       type: object
       required:
         - approver_id
@@ -432,7 +602,7 @@ components:
           format: int64
           description: The expected version for optimistic concurrency (CAS).
 
-    RevokeRequest:
+    RevokeActionRequestRequestV1:
       type: object
       required:
         - approver_id
@@ -446,7 +616,198 @@ components:
           format: int64
           description: The expected version for optimistic concurrency (CAS).
 
-    ErrorCause:
+    ReceiptSummaryDtoV1:
+      type: object
+      description: One entry in the receipt list.
+      required: [receipt_id, mandate_id, outcome, created_at]
+      properties:
+        receipt_id:
+          type: string
+          description: Receipt identifier, lower-case hex.
+        mandate_id:
+          type: string
+          description: The mandate this receipt is about.
+        outcome:
+          type: string
+          description: >
+            The outcome a receipt reports. `unknown` is a first-class result and
+            is preserved verbatim: it is never resolved to success or failure, and
+            it does not mean the action did not happen.
+          enum: [succeeded, failed, rejected, unknown]
+        created_at:
+          type: integer
+          format: int64
+          description: Receipt production time, Unix seconds.
+
+    ReceiptResponseV1:
+      type: object
+      description: A receipt projection with its evidence references.
+      required:
+        [receipt_id, mandate_id, intent_id, attempt_id, outcome, created_at,
+         dispatch_evidence_refs, target_evidence_refs, evidence_gaps]
+      properties:
+        receipt_id:
+          type: string
+          description: Receipt identifier, lower-case hex.
+        mandate_id:
+          type: string
+          description: The mandate this receipt is about.
+        intent_id:
+          type: string
+          description: The intent digest this receipt is about; empty if never bound.
+        attempt_id:
+          type: string
+          description: The execution attempt this receipt covers.
+        outcome:
+          type: string
+          description: >
+            The outcome a receipt reports. `unknown` is a first-class result and
+            is preserved verbatim: it is never resolved to success or failure, and
+            it does not mean the action did not happen.
+          enum: [succeeded, failed, rejected, unknown]
+        created_at:
+          type: integer
+          format: int64
+          description: Receipt production time, Unix seconds.
+        dispatch_evidence_refs:
+          type: array
+          description: Evidence nodes produced at the dispatch/executor boundary.
+          items:
+            type: string
+        target_evidence_refs:
+          type: array
+          description: Evidence nodes produced at the target/provider boundary.
+          items:
+            type: string
+        evidence_gaps:
+          type: array
+          description: >
+            Required evidence that is missing or unavailable, stated explicitly.
+            A gap is not proof that the action did not occur.
+          items:
+            type: string
+
+    MandateResponseV1:
+      type: object
+      description: A mandate projection over Piteka's live state.
+      required: [mandate_id, state, version]
+      properties:
+        mandate_id:
+          type: string
+          description: Mandate identifier, lower-case hex.
+        state:
+          type: string
+          description: Projected state label, for example `reserved` or `consumed`.
+        version:
+          type: integer
+          format: int64
+          description: Optimistic-concurrency version driving the reservation CAS.
+
+    MandateChainStepDtoV1:
+      type: object
+      description: One audit-log step in a mandate's chain.
+      required: [at, action, decision, detail]
+      properties:
+        at:
+          type: integer
+          format: int64
+          description: Event time, Unix seconds.
+        actor:
+          type: [string, "null"]
+          description: Acting identity, or null when no actor was recorded.
+        action:
+          type: string
+          description: The attempted action or capability.
+        decision:
+          type: string
+          description: The decision recorded, for example `granted` or `denied`.
+        detail:
+          type: string
+          description: Free-form investigator detail.
+
+    MandateChainAttemptDtoV1:
+      type: object
+      description: One execution attempt against the mandate.
+      required: [attempt_id, executor_identity, state, started_at]
+      properties:
+        attempt_id:
+          type: string
+          description: Attempt identifier, lower-case hex.
+        executor_identity:
+          type: string
+          description: Executor service identity.
+        state:
+          type: string
+          description: Current attempt state.
+        github_deployment_id:
+          type: integer
+          format: int64
+          description: GitHub-assigned deployment id, once the provider call completes.
+        started_at:
+          type: integer
+          format: int64
+          description: When the attempt was prepared, Unix seconds.
+
+    MandateChainEvidenceDtoV1:
+      type: object
+      description: A structured evidence node referenced by a receipt in the chain.
+      required: [node_id, registry_id, source, producer_identity, content_digest, media_type]
+      properties:
+        node_id:
+          type: string
+          description: Content-addressed node identifier.
+        registry_id:
+          type: string
+          description: Registered node type, for example claim, observation, attestation, gap.
+        source:
+          type: string
+          description: >
+            Source attribution: `piteka` for a Piteka claim, `provider:<name>` for
+            an external observation, `verifier` for a verifier conclusion. These
+            are distinct kinds of assertion and are never merged.
+        producer_identity:
+          type: string
+          description: Producer identity.
+        content_digest:
+          type: string
+          description: Content digest of the evidence payload, lower-case hex.
+        media_type:
+          type: string
+          description: Registered media type.
+
+    MandateChainResponseV1:
+      type: object
+      description: >
+        The assembled accountability chain for one mandate: authority to action to
+        provider deployment to receipt to evidence, with the audit timeline.
+        Integrity of these records does not establish that every asserted fact is
+        true; a consumer recomputes verdicts against the Parwana verifier.
+      required: [mandate, timeline, attempts, receipts, evidence]
+      properties:
+        mandate:
+          $ref: "#/components/schemas/MandateResponseV1"
+        timeline:
+          type: array
+          description: The audit timeline, chronological.
+          items:
+            $ref: "#/components/schemas/MandateChainStepDtoV1"
+        attempts:
+          type: array
+          description: Execution attempts against this mandate.
+          items:
+            $ref: "#/components/schemas/MandateChainAttemptDtoV1"
+        receipts:
+          type: array
+          description: Receipts produced for this mandate.
+          items:
+            $ref: "#/components/schemas/ReceiptResponseV1"
+        evidence:
+          type: array
+          description: Evidence nodes referenced by those receipts.
+          items:
+            $ref: "#/components/schemas/MandateChainEvidenceDtoV1"
+
+    ErrorCauseDtoV1:
       type: object
       required:
         - code
@@ -463,15 +824,15 @@ components:
           nullable: true
           description: Optional field or header that triggered the error.
 
-    ErrorResponse:
+    ErrorResponseV1:
       type: object
       required:
         - error
       properties:
         error:
-          $ref: "#/components/schemas/ErrorDetail"
+          $ref: "#/components/schemas/ErrorDetailDtoV1"
 
-    ErrorDetail:
+    ErrorDetailDtoV1:
       type: object
       required:
         - code
@@ -486,6 +847,54 @@ components:
         causes:
           type: array
           items:
-            $ref: "#/components/schemas/ErrorCause"
+            $ref: "#/components/schemas/ErrorCauseDtoV1"
           nullable: true
           description: Optional list of specific causes.
+
+    # Compatibility aliases retained for generators and documents that resolve
+    # the original v1 component names. Endpoint refs use the explicit names
+    # above; removing these aliases requires a separately versioned API change.
+    ActionRequestStatus:
+      deprecated: true
+      allOf:
+        - $ref: "#/components/schemas/ActionRequestStatusDtoV1"
+    ActionRequestSummary:
+      deprecated: true
+      allOf:
+        - $ref: "#/components/schemas/ActionRequestSummaryDtoV1"
+    ActionRequestResponse:
+      deprecated: true
+      allOf:
+        - $ref: "#/components/schemas/ActionRequestResponseV1"
+    ApprovalDecisionResponse:
+      deprecated: true
+      allOf:
+        - $ref: "#/components/schemas/ApprovalDecisionDtoV1"
+    CreateActionRequestRequest:
+      deprecated: true
+      allOf:
+        - $ref: "#/components/schemas/CreateActionRequestRequestV1"
+    ApproveRequest:
+      deprecated: true
+      allOf:
+        - $ref: "#/components/schemas/ApproveActionRequestRequestV1"
+    RejectRequest:
+      deprecated: true
+      allOf:
+        - $ref: "#/components/schemas/RejectActionRequestRequestV1"
+    RevokeRequest:
+      deprecated: true
+      allOf:
+        - $ref: "#/components/schemas/RevokeActionRequestRequestV1"
+    ErrorCause:
+      deprecated: true
+      allOf:
+        - $ref: "#/components/schemas/ErrorCauseDtoV1"
+    ErrorResponse:
+      deprecated: true
+      allOf:
+        - $ref: "#/components/schemas/ErrorResponseV1"
+    ErrorDetail:
+      deprecated: true
+      allOf:
+        - $ref: "#/components/schemas/ErrorDetailDtoV1"

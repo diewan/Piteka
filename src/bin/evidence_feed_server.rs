@@ -151,6 +151,10 @@ fn load_signing_key(path: &str) -> Result<SigningKey, String> {
 /// immutable `created_at` — bumped to stay *strictly* increasing — so the
 /// consumer's per-observation sync cursor advances monotonically and the same
 /// receipt keeps the same `emitted_at` across pulls.
+// Each store is a separate port and the tenant scope is passed explicitly rather
+// than captured, so that no call site can build an export against an implicit or
+// inherited tenant.
+#[allow(clippy::too_many_arguments)]
 async fn build_exports(
     tenant: &piteka_storage::TenantScope,
     receipts: &PgReceiptProjectionStore,

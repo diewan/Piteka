@@ -12,7 +12,7 @@ use serde::Serialize;
 
 /// A single cause within an error response.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct ErrorCause {
+pub struct ErrorCauseDtoV1 {
     /// Machine-readable error code.
     pub code: String,
     /// Human-readable explanation.
@@ -36,16 +36,16 @@ pub struct ErrorCause {
 /// }
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct ErrorResponse {
-    pub error: ErrorDetail,
+pub struct ErrorResponseV1 {
+    pub error: ErrorDetailDtoV1,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct ErrorDetail {
+pub struct ErrorDetailDtoV1 {
     pub code: String,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub causes: Option<Vec<ErrorCause>>,
+    pub causes: Option<Vec<ErrorCauseDtoV1>>,
 }
 
 /// All API-level errors.
@@ -54,7 +54,7 @@ pub enum ApiError {
     /// The requested resource was not found.
     NotFound { resource: String, id: String },
     /// The request body was malformed or missing required fields.
-    BadRequest { causes: Vec<ErrorCause> },
+    BadRequest { causes: Vec<ErrorCauseDtoV1> },
     /// The request failed authentication (e.g., invalid webhook signature).
     Unauthorized { code: String, message: String },
     /// The idempotency key is already in use.
@@ -84,7 +84,7 @@ impl ApiError {
     /// Returns a 400 Bad Request response for a single cause.
     pub fn bad_request(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self::BadRequest {
-            causes: vec![ErrorCause {
+            causes: vec![ErrorCauseDtoV1 {
                 code: code.into(),
                 message: message.into(),
                 source: None,
@@ -93,12 +93,12 @@ impl ApiError {
     }
 
     /// Returns a 400 Bad Request response for a missing required header.
-    pub fn missing_required_header(header: &str) -> Json<ErrorResponse> {
-        Json(ErrorResponse {
-            error: ErrorDetail {
+    pub fn missing_required_header(header: &str) -> Json<ErrorResponseV1> {
+        Json(ErrorResponseV1 {
+            error: ErrorDetailDtoV1 {
                 code: "MISSING_REQUIRED_HEADER".to_string(),
                 message: format!("The `{}` header is required", header),
-                causes: Some(vec![ErrorCause {
+                causes: Some(vec![ErrorCauseDtoV1 {
                     code: "MISSING_REQUIRED_HEADER".to_string(),
                     message: format!("The `{}` header must be present", header),
                     source: Some(header.to_string()),
@@ -189,10 +189,10 @@ impl IntoResponse for ApiError {
         let (status, detail) = match &self {
             Self::NotFound { resource, id } => (
                 StatusCode::NOT_FOUND,
-                ErrorDetail {
+                ErrorDetailDtoV1 {
                     code: "NOT_FOUND".to_string(),
                     message: format!("{} `{}` not found", resource, id),
-                    causes: Some(vec![ErrorCause {
+                    causes: Some(vec![ErrorCauseDtoV1 {
                         code: "NOT_FOUND".to_string(),
                         message: format!("{} `{}` not found", resource, id),
                         source: Some("id".to_string()),
@@ -201,7 +201,7 @@ impl IntoResponse for ApiError {
             ),
             Self::BadRequest { causes } => (
                 StatusCode::BAD_REQUEST,
-                ErrorDetail {
+                ErrorDetailDtoV1 {
                     code: "BAD_REQUEST".to_string(),
                     message: "The request body is malformed or missing required fields".to_string(),
                     causes: Some(causes.clone()),
@@ -209,10 +209,10 @@ impl IntoResponse for ApiError {
             ),
             Self::Unauthorized { code, message } => (
                 StatusCode::UNAUTHORIZED,
-                ErrorDetail {
+                ErrorDetailDtoV1 {
                     code: code.clone(),
                     message: message.clone(),
-                    causes: Some(vec![ErrorCause {
+                    causes: Some(vec![ErrorCauseDtoV1 {
                         code: code.clone(),
                         message: message.clone(),
                         source: None,
@@ -221,13 +221,13 @@ impl IntoResponse for ApiError {
             ),
             Self::IdempotencyConflict { idempotency_key } => (
                 StatusCode::CONFLICT,
-                ErrorDetail {
+                ErrorDetailDtoV1 {
                     code: "IDEMPOTENCY_CONFLICT".to_string(),
                     message: format!(
                         "Idempotency key `{}` has already been used",
                         idempotency_key
                     ),
-                    causes: Some(vec![ErrorCause {
+                    causes: Some(vec![ErrorCauseDtoV1 {
                         code: "IDEMPOTENCY_CONFLICT".to_string(),
                         message: format!(
                             "Idempotency key `{}` has already been used",
@@ -239,13 +239,13 @@ impl IntoResponse for ApiError {
             ),
             Self::InvalidState { current, attempted } => (
                 StatusCode::CONFLICT,
-                ErrorDetail {
+                ErrorDetailDtoV1 {
                     code: "INVALID_STATE".to_string(),
                     message: format!(
                         "Cannot {} from status `{}`",
                         attempted, current
                     ),
-                    causes: Some(vec![ErrorCause {
+                    causes: Some(vec![ErrorCauseDtoV1 {
                         code: "INVALID_STATE".to_string(),
                         message: format!(
                             "The action request is in status `{}`; expected `Pending` for approve/reject or `Approved` for revoke",
@@ -260,11 +260,11 @@ impl IntoResponse for ApiError {
                 current_version,
             } => (
                 StatusCode::CONFLICT,
-                ErrorDetail {
+                ErrorDetailDtoV1 {
                     code: "CONFLICT".to_string(),
                     message: "Optimistic concurrency conflict".to_string(),
                     causes: Some(vec![
-                        ErrorCause {
+                        ErrorCauseDtoV1 {
                             code: "CONFLICT".to_string(),
                             message: format!(
                                 "Expected version {}, current version {}",
@@ -272,7 +272,7 @@ impl IntoResponse for ApiError {
                             ),
                             source: Some("version".to_string()),
                         },
-                        ErrorCause {
+                        ErrorCauseDtoV1 {
                             code: "OPTIMISTIC_CONFLICT".to_string(),
                             message: "Another request modified this resource. Retry with the current version.".to_string(),
                             source: None,
@@ -282,10 +282,10 @@ impl IntoResponse for ApiError {
             ),
             Self::Forbidden { capability } => (
                 StatusCode::FORBIDDEN,
-                ErrorDetail {
+                ErrorDetailDtoV1 {
                     code: "FORBIDDEN".to_string(),
                     message: format!("The caller lacks capability `{}`", capability),
-                    causes: Some(vec![ErrorCause {
+                    causes: Some(vec![ErrorCauseDtoV1 {
                         code: "FORBIDDEN".to_string(),
                         message: format!("Required capability: `{}`", capability),
                         source: Some("capability".to_string()),
@@ -294,10 +294,10 @@ impl IntoResponse for ApiError {
             ),
             Self::Internal(msg) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                ErrorDetail {
+                ErrorDetailDtoV1 {
                     code: "INTERNAL_ERROR".to_string(),
                     message: "An internal error occurred".to_string(),
-                    causes: Some(vec![ErrorCause {
+                    causes: Some(vec![ErrorCauseDtoV1 {
                         code: "INTERNAL_ERROR".to_string(),
                         message: msg.clone(),
                         source: None,
@@ -306,6 +306,6 @@ impl IntoResponse for ApiError {
             ),
         };
 
-        (status, Json(ErrorResponse { error: detail })).into_response()
+        (status, Json(ErrorResponseV1 { error: detail })).into_response()
     }
 }

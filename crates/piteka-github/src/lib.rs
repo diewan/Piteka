@@ -56,7 +56,7 @@ use base64::Engine;
 use hmac::Mac;
 use piteka_domain::OrganizationId;
 use piteka_ports::github::{
-    DeploymentCreated, GitHubAppError, GitHubAppPort, GitHubEnvironmentName,
+    DeploymentCreationResponse, GitHubAppError, GitHubAppPort, GitHubEnvironmentName,
     GitHubInstallationContext, GitHubInstallationId, GitHubRepositoryId, GitHubSecretError,
     GitHubSecretReference, GitHubSecretResolver, GitHubWebhookPayload, GitHubWebhookSecret,
     WebhookSignatureResult,
@@ -594,7 +594,7 @@ where
         auto_merge: bool,
         payload_commitment: &str,
         attempt_digest: [u8; 32],
-    ) -> Result<DeploymentCreated, GitHubAppError> {
+    ) -> Result<DeploymentCreationResponse, GitHubAppError> {
         // The adapter is the credential boundary. Caller-controlled provider
         // identifiers must not select a different target while reusing this
         // adapter's configured credential.
@@ -705,7 +705,7 @@ where
             .json::<DeploymentResponse>()
             .await
             .map_err(|error| GitHubAppError::ApiError(error.to_string()))?;
-        Ok(DeploymentCreated {
+        Ok(DeploymentCreationResponse {
             deployment_id: created.id,
             url: created.url,
             attempt_digest,

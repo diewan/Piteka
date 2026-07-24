@@ -9,8 +9,8 @@ mod identity_tests;
 mod session_tests;
 
 pub use identity::{
-    Capability, ConfiguredOrganization, Identity, IdentityError, Organization, OrganizationId, Role,
-    UserId,
+    Capability, ConfiguredOrganization, Identity, IdentityError, Organization, OrganizationId,
+    Role, UserId,
 };
 pub use session::{SessionClaims, SessionError, SessionId};
 

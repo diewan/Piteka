@@ -1,9 +1,16 @@
-//! Local Single-Use Seal anchoring adapter (Phase B, §5.9).
+//! Ephemeral in-process Single-Use Seal anchoring adapter (Phase B, §5.9).
 //!
-//! [`LocalCsvSealAnchor`] is the in-process backing for [`AnchorPort`]: seals live in a
-//! `Mutex`-guarded map. It enforces single use independently of Piteka's Postgres
+//! [`InMemoryCsvSealAnchor`] is the in-process backing for [`AnchorPort`]: seals live in a
+//! `Mutex`-guarded map. The `InMemory` qualifier is the durability statement — this
+//! backing loses every seal on restart, so it corroborates single use only for the
+//! lifetime of the process. A durable backing (the on-chain CSVSeal path) is selectable
+//! later behind the same trait. It enforces single use independently of Piteka's Postgres
 //! reservation — a seal binds a commitment at creation and can be consumed exactly once —
 //! and preserves a [`ConsumptionProof`] that re-checks offline.
+//!
+//! The stored backend discriminator value [`LOCAL_SEAL_BACKEND`] (`csv-seal.local.v1`) is
+//! unchanged by this rename: it is written to `seal_consumption_proofs.anchor_backend` and
+//! into exported bundles, so its bytes are a compatibility surface, not a source name.
 //!
 //! It is intended to run off the dispatch hot path (from the reconciliation/worker
 //! background infrastructure), never in the provider dispatch call. The real on-chain
@@ -24,13 +31,16 @@ struct SealState {
     consumed_by: Option<Digest32>,
 }
 
-/// In-process single-use seal store implementing [`AnchorPort`].
+/// Ephemeral in-process single-use seal store implementing [`AnchorPort`].
+///
+/// State is lost on restart; it is corroborating evidence, never the authoritative
+/// reservation, which remains Piteka's PostgreSQL compare-and-swap.
 #[derive(Default)]
-pub struct LocalCsvSealAnchor {
+pub struct InMemoryCsvSealAnchor {
     seals: Mutex<HashMap<Digest32, SealState>>,
 }
 
-impl LocalCsvSealAnchor {
+impl InMemoryCsvSealAnchor {
     /// Creates an empty local seal store.
     pub fn new() -> Self {
         Self::default()
@@ -46,7 +56,7 @@ impl LocalCsvSealAnchor {
 }
 
 #[async_trait]
-impl AnchorPort for LocalCsvSealAnchor {
+impl AnchorPort for InMemoryCsvSealAnchor {
     async fn create_seal(
         &self,
         seal_id: Digest32,
@@ -114,7 +124,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_then_consume_yields_a_binding_proof() {
-        let anchor = LocalCsvSealAnchor::new();
+        let anchor = InMemoryCsvSealAnchor::new();
         anchor.create_seal(d(1), d(2)).await.unwrap();
         let proof = anchor.consume_seal(d(1), d(3)).await.unwrap();
         assert_eq!(proof.seal_id, d(1));
@@ -125,7 +135,7 @@ mod tests {
 
     #[tokio::test]
     async fn re_consuming_with_the_same_nullifier_is_idempotent() {
-        let anchor = LocalCsvSealAnchor::new();
+        let anchor = InMemoryCsvSealAnchor::new();
         anchor.create_seal(d(1), d(2)).await.unwrap();
         let first = anchor.consume_seal(d(1), d(3)).await.unwrap();
         let second = anchor.consume_seal(d(1), d(3)).await.unwrap();
@@ -134,7 +144,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_second_nullifier_is_rejected_as_double_use() {
-        let anchor = LocalCsvSealAnchor::new();
+        let anchor = InMemoryCsvSealAnchor::new();
         anchor.create_seal(d(1), d(2)).await.unwrap();
         anchor.consume_seal(d(1), d(3)).await.unwrap();
         assert_eq!(
@@ -145,7 +155,7 @@ mod tests {
 
     #[tokio::test]
     async fn consuming_an_unknown_seal_fails_closed() {
-        let anchor = LocalCsvSealAnchor::new();
+        let anchor = InMemoryCsvSealAnchor::new();
         assert_eq!(
             anchor.consume_seal(d(1), d(3)).await,
             Err(AnchorError::SealNotFound)
@@ -154,11 +164,40 @@ mod tests {
 
     #[tokio::test]
     async fn recreating_a_seal_with_a_different_commitment_is_rejected() {
-        let anchor = LocalCsvSealAnchor::new();
+        let anchor = InMemoryCsvSealAnchor::new();
         anchor.create_seal(d(1), d(2)).await.unwrap();
         assert_eq!(
             anchor.create_seal(d(1), d(5)).await,
             Err(AnchorError::SealAlreadyExists)
         );
+    }
+}
+
+#[cfg(test)]
+mod nam02_rename_compatibility {
+    use super::*;
+
+    fn d(byte: u8) -> Digest32 {
+        [byte; 32]
+    }
+
+    /// NAM-02 renamed `LocalCsvSealAnchor` to `InMemoryCsvSealAnchor` so the type
+    /// name states its durability. The backend discriminator it writes is a
+    /// *stored* value — it lands in `seal_consumption_proofs.anchor_backend` and in
+    /// exported dispute bundles — so it must not move with the type name. If this
+    /// assertion ever needs changing, that is a data migration, not a rename.
+    #[tokio::test]
+    async fn stored_backend_discriminator_is_unchanged_by_the_type_rename() {
+        assert_eq!(LOCAL_SEAL_BACKEND, "csv-seal.local.v1");
+
+        let anchor = InMemoryCsvSealAnchor::new();
+        let reference = anchor.create_seal(d(1), d(2)).await.unwrap();
+        assert_eq!(reference.backend, "csv-seal.local.v1");
+
+        let proof = anchor.consume_seal(d(1), d(3)).await.unwrap();
+        assert_eq!(proof.backend, "csv-seal.local.v1");
+
+        let anchored = anchor.anchor_commitment(d(4)).await.unwrap();
+        assert_eq!(anchored.backend, "csv-seal.local.v1");
     }
 }

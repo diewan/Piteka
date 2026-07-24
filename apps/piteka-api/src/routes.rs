@@ -21,9 +21,10 @@ use piteka_storage::{
 use crate::TestPorts;
 use crate::error::ApiError;
 use crate::models::{
-    ActionRequestResponse, ActionRequestSummary, ApproveRequest, ChainAttempt, ChainEvidence,
-    ChainStep, CreateActionRequestRequest, MandateChain, MandateDetail, ReceiptDetail,
-    ReceiptSummary, RejectRequest, RevokeRequest,
+    ActionRequestResponseV1, ActionRequestSummaryDtoV1, ApproveActionRequestRequestV1,
+    CreateActionRequestRequestV1, MandateChainAttemptDtoV1, MandateChainEvidenceDtoV1,
+    MandateChainResponseV1, MandateChainStepDtoV1, MandateResponseV1, ReceiptResponseV1,
+    ReceiptSummaryDtoV1, RejectActionRequestRequestV1, RevokeActionRequestRequestV1,
 };
 
 /// Builds the action-requests router mounted at `/api/v1/action-requests`.
@@ -84,7 +85,7 @@ pub async fn build_live_webhook_router(
 ) -> Result<Router, piteka_storage::StorageError> {
     let pool = piteka_storage::postgres::connect(database_url).await?;
     piteka_storage::postgres::run_migrations(&pool).await?;
-    let webhook_receipts = piteka_storage::postgres::PgWebhookReceiptStore::new(pool.clone());
+    let webhook_receipts = piteka_storage::postgres::PgWebhookDeliveryStore::new(pool.clone());
     let audit = piteka_storage::postgres::PgAuditLog::new(pool.clone());
     let attempts = std::sync::Arc::new(piteka_storage::postgres::PgExecutionAttemptStore::new(
         pool.clone(),
@@ -171,7 +172,7 @@ async fn list_receipts(State(state): State<ReadState>) -> Response {
     let mut summaries = Vec::with_capacity(ids.len());
     for (id, _created) in ids {
         match state.receipts.get(&state.tenant, &id).await {
-            Ok(Some(receipt)) => summaries.push(ReceiptSummary {
+            Ok(Some(receipt)) => summaries.push(ReceiptSummaryDtoV1 {
                 receipt_id: receipt.receipt_id_hex,
                 mandate_id: receipt.mandate_id_hex,
                 outcome: outcome_str(&receipt.outcome).to_string(),
@@ -225,7 +226,7 @@ async fn export_receipt(State(state): State<ReadState>, Path(id): Path<String>) 
 /// `GET /api/v1/mandates/{id}` — one mandate projection.
 async fn get_mandate(State(state): State<ReadState>, Path(id): Path<String>) -> Response {
     match state.mandates.get(&state.tenant, &id).await {
-        Ok(Some(mandate)) => Json(MandateDetail {
+        Ok(Some(mandate)) => Json(MandateResponseV1 {
             mandate_id: mandate.mandate_id_hex,
             state: mandate.state,
             version: mandate.version,
@@ -293,14 +294,14 @@ async fn get_mandate_chain(State(state): State<ReadState>, Path(id): Path<String
         Ok(events) => events,
         Err(err) => return ApiError::from(err).into_response(),
     };
-    let mut timeline: Vec<ChainStep> = recent
+    let mut timeline: Vec<MandateChainStepDtoV1> = recent
         .into_iter()
         .filter(|event| {
             match_ids
                 .iter()
                 .any(|needle| event.detail.contains(needle.as_str()))
         })
-        .map(|event| ChainStep {
+        .map(|event| MandateChainStepDtoV1 {
             at: event.occurred_at_unix_seconds,
             actor: event.actor,
             action: event.action,
@@ -313,8 +314,8 @@ async fn get_mandate_chain(State(state): State<ReadState>, Path(id): Path<String
     // → reserve → consume).
     timeline.sort_by_key(|step| step.at);
 
-    let response = MandateChain {
-        mandate: MandateDetail {
+    let response = MandateChainResponseV1 {
+        mandate: MandateResponseV1 {
             mandate_id: mandate.mandate_id_hex,
             state: mandate.state,
             version: mandate.version,
@@ -327,8 +328,8 @@ async fn get_mandate_chain(State(state): State<ReadState>, Path(id): Path<String
     Json(response).into_response()
 }
 
-fn receipt_detail(receipt: ReceiptProjection) -> ReceiptDetail {
-    ReceiptDetail {
+fn receipt_detail(receipt: ReceiptProjection) -> ReceiptResponseV1 {
+    ReceiptResponseV1 {
         receipt_id: receipt.receipt_id_hex,
         mandate_id: receipt.mandate_id_hex,
         intent_id: receipt.intent_id_hex,
@@ -341,8 +342,8 @@ fn receipt_detail(receipt: ReceiptProjection) -> ReceiptDetail {
     }
 }
 
-fn chain_attempt(attempt: ExecutionAttempt) -> ChainAttempt {
-    ChainAttempt {
+fn chain_attempt(attempt: ExecutionAttempt) -> MandateChainAttemptDtoV1 {
+    MandateChainAttemptDtoV1 {
         attempt_id: attempt.attempt_id_hex,
         executor_identity: attempt.executor_identity,
         state: attempt_state_str(&attempt.state).to_string(),
@@ -351,8 +352,8 @@ fn chain_attempt(attempt: ExecutionAttempt) -> ChainAttempt {
     }
 }
 
-fn chain_evidence(node: EvidenceNodeRecord) -> ChainEvidence {
-    ChainEvidence {
+fn chain_evidence(node: EvidenceNodeRecord) -> MandateChainEvidenceDtoV1 {
+    MandateChainEvidenceDtoV1 {
         node_id: node.node_id_hex,
         registry_id: node.registry_id,
         source: source_str(&node.source),
@@ -402,9 +403,9 @@ async fn list_action_requests<P: ActionRequestPorts>(
         Err(err) => return ApiError::from(err).into_response(),
     };
 
-    let summaries: Vec<ActionRequestSummary> = requests
+    let summaries: Vec<ActionRequestSummaryDtoV1> = requests
         .into_iter()
-        .map(|r| ActionRequestSummary {
+        .map(|r| ActionRequestSummaryDtoV1 {
             id: r.request_id,
             requested_by: r.requested_by,
             status: r.status.into(),
@@ -434,7 +435,7 @@ async fn get_action_request<P: ActionRequestPorts>(
         Err(err) => return ApiError::from(err).into_response(),
     };
 
-    let response = ActionRequestResponse {
+    let response = ActionRequestResponseV1 {
         id: request.request_id,
         requested_by: request.requested_by,
         intent_id: request.intent_id_hex,
@@ -448,7 +449,7 @@ async fn get_action_request<P: ActionRequestPorts>(
 
 async fn propose_action_request<P: ActionRequestPorts>(
     State(use_case): State<ActionRequestUseCase<P>>,
-    Json(body): Json<CreateActionRequestRequest>,
+    Json(body): Json<CreateActionRequestRequestV1>,
 ) -> Response {
     if body.requested_by.is_empty() {
         return ApiError::bad_request("EMPTY_REQUESTED_BY", "The `requested_by` field is required")
@@ -466,7 +467,7 @@ async fn propose_action_request<P: ActionRequestPorts>(
     };
 
     let request = proposed.request;
-    let response = ActionRequestResponse {
+    let response = ActionRequestResponseV1 {
         id: request.request_id,
         requested_by: request.requested_by,
         intent_id: request.intent_id_hex,
@@ -481,7 +482,7 @@ async fn propose_action_request<P: ActionRequestPorts>(
 async fn approve_action_request<P: ActionRequestPorts>(
     State(use_case): State<ActionRequestUseCase<P>>,
     axum::extract::Path(request_id): axum::extract::Path<String>,
-    Json(body): Json<ApproveRequest>,
+    Json(body): Json<ApproveActionRequestRequestV1>,
 ) -> Response {
     if body.approver_id.is_empty() {
         return ApiError::bad_request("EMPTY_APPROVER_ID", "The `approver_id` field is required")
@@ -504,7 +505,7 @@ async fn approve_action_request<P: ActionRequestPorts>(
         Err(err) => return ApiError::from(err).into_response(),
     };
 
-    let response = ActionRequestResponse {
+    let response = ActionRequestResponseV1 {
         id: approved.request.request_id,
         requested_by: approved.request.requested_by,
         intent_id: approved.request.intent_id_hex,
@@ -519,7 +520,7 @@ async fn approve_action_request<P: ActionRequestPorts>(
 async fn reject_action_request<P: ActionRequestPorts>(
     State(use_case): State<ActionRequestUseCase<P>>,
     axum::extract::Path(request_id): axum::extract::Path<String>,
-    Json(body): Json<RejectRequest>,
+    Json(body): Json<RejectActionRequestRequestV1>,
 ) -> Response {
     if body.approver_id.is_empty() {
         return ApiError::bad_request("EMPTY_APPROVER_ID", "The `approver_id` field is required")
@@ -542,7 +543,7 @@ async fn reject_action_request<P: ActionRequestPorts>(
         Err(err) => return ApiError::from(err).into_response(),
     };
 
-    let response = ActionRequestResponse {
+    let response = ActionRequestResponseV1 {
         id: rejected.request.request_id,
         requested_by: rejected.request.requested_by,
         intent_id: rejected.request.intent_id_hex,
@@ -557,7 +558,7 @@ async fn reject_action_request<P: ActionRequestPorts>(
 async fn revoke_action_request<P: ActionRequestPorts>(
     State(use_case): State<ActionRequestUseCase<P>>,
     axum::extract::Path(request_id): axum::extract::Path<String>,
-    Json(body): Json<RevokeRequest>,
+    Json(body): Json<RevokeActionRequestRequestV1>,
 ) -> Response {
     if body.approver_id.is_empty() {
         return ApiError::bad_request("EMPTY_APPROVER_ID", "The `approver_id` field is required")
@@ -577,7 +578,7 @@ async fn revoke_action_request<P: ActionRequestPorts>(
         Err(err) => return ApiError::from(err).into_response(),
     };
 
-    let response = ActionRequestResponse {
+    let response = ActionRequestResponseV1 {
         id: revoked.request.request_id,
         requested_by: revoked.request.requested_by,
         intent_id: revoked.request.intent_id_hex,

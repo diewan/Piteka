@@ -46,7 +46,7 @@
 
 use piteka_parwana::ParwanaContract;
 use piteka_parwana::protocol::{
-    ActionIntent, ActionIntentWire, GitHubDeploymentIntentV1, GitHubDeploymentIntentV1Wire,
+    ActionIntent, ActionIntentWireV1, GitHubDeploymentIntentV1, GitHubDeploymentIntentV1Wire,
     IntentError, ProfileRegistry, RequiredContexts, default_registry, github_deployment_descriptor,
 };
 use serde::{Deserialize, Serialize};
@@ -180,13 +180,19 @@ pub enum RequiredContextsMode {
     ExplicitNonEmpty(Vec<String>),
 }
 
-/// A validated, normalized GitHub deployment intent ready for mandate binding.
+/// A validated, provider-normalized GitHub deployment intent ready for mandate
+/// binding.
 ///
 /// This struct wraps a fully validated [`ActionIntent`] along with the
 /// normalized profile data, providing a single return type for the
 /// [`GitHubIntentNormalizer::normalize`] method.
+///
+/// The `GitHubDeployment` qualifier is deliberate: this is a Piteka-owned,
+/// provider-specific normalization result, **not** a canonical Parwana intent.
+/// The canonical protocol object is the `intent` field, whose meaning is owned
+/// by Parwana alone.
 #[derive(Clone, Debug)]
-pub struct NormalizedIntent {
+pub struct NormalizedGitHubDeploymentIntent {
     /// The canonical Parwana action intent.
     pub intent: ActionIntent,
     /// The normalized GitHub deployment profile.
@@ -249,7 +255,7 @@ impl GitHubIntentNormalizer {
         requested_at: u64,
         request_nonce: [u8; 32],
         context_commitments: Vec<[u8; 32]>,
-    ) -> Result<NormalizedIntent, NormalizeError> {
+    ) -> Result<NormalizedGitHubDeploymentIntent, NormalizeError> {
         // Validate fixed controls first — fail fast on weakening attempts.
         Self::validate_task(&input.task)?;
         Self::validate_auto_merge(input.auto_merge)?;
@@ -377,7 +383,7 @@ impl GitHubIntentNormalizer {
             _ => NormalizeError::ParwanaError(format!("intent validation failed: {e:?}")),
         })?;
 
-        Ok(NormalizedIntent {
+        Ok(NormalizedGitHubDeploymentIntent {
             intent,
             profile,
             gate_policy_digest: gate_policy_id.into_bytes(),
@@ -596,16 +602,19 @@ fn build_github_action_intent(
     )
 }
 
-/// A normalized intent ready for serialization to the JSON wire format.
+/// The JSON boundary shape of a normalized GitHub deployment intent, version 1.
 ///
-/// This struct is the output of [`GitHubIntentNormalizer::normalize`] when
-/// the caller needs the JSON-serializable wire representation instead of
-/// the canonical Parwana types.
+/// This is a Piteka-owned transfer shape, not a canonical protocol wire
+/// contract: it is a `Dto` rather than a `Wire` type, because Parwana alone
+/// owns canonical serialization. The fields it carries
+/// ([`ActionIntentWireV1`], [`GitHubDeploymentIntentV1Wire`]) *are* the canonical
+/// Parwana representations and are re-used verbatim; this struct only bundles
+/// them for transport.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct NormalizedIntentWire {
+pub struct NormalizedGitHubDeploymentIntentDtoV1 {
     /// The complete action intent in wire format.
-    pub intent: ActionIntentWire,
+    pub intent: ActionIntentWireV1,
     /// The normalized GitHub deployment profile.
     pub profile: GitHubDeploymentIntentV1Wire,
     /// The gate-policy digest derived from required contexts.
@@ -618,7 +627,7 @@ pub struct NormalizedIntentWire {
 /// callers who work with JSON serialization directly.
 pub mod wire {
     pub use piteka_parwana::protocol::{
-        ActionIntentWire, GitHubDeploymentIntentV1Wire, RequiredContextsWire,
+        ActionIntentWireV1, GitHubDeploymentIntentV1Wire, RequiredContextsWire,
     };
 }
 

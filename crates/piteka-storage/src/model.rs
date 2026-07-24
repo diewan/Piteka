@@ -99,16 +99,25 @@ pub enum CasOutcome {
     Missing,
 }
 
-/// A received provider webhook, recorded once per delivery id.
+/// A received provider webhook delivery, recorded once per delivery id.
+///
+/// This is a transport-level deduplication record: it proves that Piteka received
+/// a delivery with this id and retained its raw payload digest. It is **not** a
+/// protocol `Receipt` — it makes no claim about what the deployment did, and it is
+/// never bound to a mandate. The protocol receipt for an action is
+/// [`ReceiptProjection`]; keeping the two names apart is what stops a delivery
+/// acknowledgement from being read as evidence of an outcome.
+///
+/// Stored in the `webhook_receipts` table, whose name is unchanged.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WebhookReceipt {
+pub struct WebhookDeliveryRecord {
     /// Provider-unique delivery identifier. Unique key.
     pub delivery_id: String,
     /// Source label (for example `github`).
     pub source: String,
     /// Digest of the raw payload retained for forensic reconstruction.
     pub raw_digest: ContentDigest,
-    /// Receipt time, Unix seconds.
+    /// Time the delivery was received, Unix seconds.
     pub received_at_unix_seconds: i64,
 }
 

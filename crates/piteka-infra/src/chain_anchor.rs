@@ -1,8 +1,13 @@
-//! Local deterministic on-chain anchoring adapter (ANCHOR-01, §5.9).
+//! Ephemeral in-process deterministic chain-anchoring adapter (ANCHOR-01, §5.9).
 //!
-//! [`LocalChainAnchor`] is an in-process backing for [`ChainAnchorPort`], used as
+//! [`InMemoryChainAnchor`] is an in-process backing for [`ChainAnchorPort`], used as
 //! the deterministic stand-in for a real chain adapter until a live RPC backing
-//! is configured behind the same trait. Anchoring a commitment records it as
+//! is configured behind the same trait. The `InMemory` qualifier is the durability
+//! statement — anchors are lost on restart, and no real chain is involved.
+//!
+//! The stored backend discriminator value [`LOCAL_CHAIN_ANCHOR_BACKEND`]
+//! (`chain.local.v1`) is unchanged by this rename; it identifies the backing in stored
+//! and exported records. Anchoring a commitment records it as
 //! *pending*; each finality read advances the confirmation depth by a fixed step
 //! until it reaches the reorg-safe requirement, so a test can drive the
 //! pending → final transition without a live chain. It never fabricates
@@ -32,13 +37,17 @@ struct AnchorState {
     record: ChainAnchorRecord,
 }
 
-/// In-process deterministic chain-anchor store implementing [`ChainAnchorPort`].
+/// Ephemeral in-process deterministic chain-anchor store implementing
+/// [`ChainAnchorPort`].
+///
+/// State is lost on restart. It never fabricates finality: the confirmation depth
+/// only advances, and finality is derived from it rather than asserted.
 #[derive(Default)]
-pub struct LocalChainAnchor {
+pub struct InMemoryChainAnchor {
     anchors: Mutex<HashMap<Vec<u8>, AnchorState>>,
 }
 
-impl LocalChainAnchor {
+impl InMemoryChainAnchor {
     /// Creates an empty local chain-anchor store.
     #[must_use]
     pub fn new() -> Self {
@@ -67,7 +76,7 @@ impl LocalChainAnchor {
 }
 
 #[async_trait]
-impl ChainAnchorPort for LocalChainAnchor {
+impl ChainAnchorPort for InMemoryChainAnchor {
     async fn anchor_commitment_on_chain(
         &self,
         commitment: Digest32,
@@ -90,11 +99,9 @@ impl ChainAnchorPort for LocalChainAnchor {
         };
         let mut anchors = self.anchors.lock().expect("anchor store lock");
         // Anchoring the same commitment again returns the existing record.
-        let state = anchors
-            .entry(anchor_ref)
-            .or_insert_with(|| AnchorState {
-                record: record.clone(),
-            });
+        let state = anchors.entry(anchor_ref).or_insert_with(|| AnchorState {
+            record: record.clone(),
+        });
         Ok(state.record.clone())
     }
 
@@ -124,7 +131,7 @@ mod tests {
 
     #[tokio::test]
     async fn anchor_starts_pending_and_reads_advance_to_final() {
-        let adapter = LocalChainAnchor::new();
+        let adapter = InMemoryChainAnchor::new();
         let commitment = [0x11u8; 32];
 
         let anchored = adapter
@@ -156,7 +163,7 @@ mod tests {
 
     #[tokio::test]
     async fn reading_an_unknown_anchor_fails_closed() {
-        let adapter = LocalChainAnchor::new();
+        let adapter = InMemoryChainAnchor::new();
         let phantom = ChainAnchorRecord {
             commitment: [1u8; 32],
             chain_id: "ethereum-sepolia".to_string(),
@@ -170,6 +177,29 @@ mod tests {
         assert_eq!(
             adapter.read_finality(&phantom).await,
             Err(AnchorError::SealNotFound)
+        );
+    }
+}
+
+#[cfg(test)]
+mod nam02_rename_compatibility {
+    use super::*;
+
+    /// As with the seal backing, renaming `LocalChainAnchor` to
+    /// `InMemoryChainAnchor` must not disturb the discriminator written into
+    /// stored and exported anchor records.
+    #[tokio::test]
+    async fn stored_backend_discriminator_is_unchanged_by_the_type_rename() {
+        assert_eq!(LOCAL_CHAIN_ANCHOR_BACKEND, "chain.local.v1");
+
+        let record = InMemoryChainAnchor::new()
+            .anchor_commitment_on_chain([0x22u8; 32], "ethereum-sepolia")
+            .await
+            .unwrap();
+        assert_eq!(record.backend, "chain.local.v1");
+        assert!(
+            !record.is_final(),
+            "an ephemeral in-process anchor still starts pending, never final"
         );
     }
 }

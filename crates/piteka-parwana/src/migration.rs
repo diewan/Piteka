@@ -144,9 +144,15 @@ mod tests {
     #[test]
     fn normalizes_and_builds_a_registered_intent() {
         let registry = default_registry();
-        let intent =
-            build_migration_action_intent(&registry, &input(), b"svc:migrator".to_vec(), 1, [9u8; 32], vec![])
-                .expect("builds");
+        let intent = build_migration_action_intent(
+            &registry,
+            &input(),
+            b"svc:migrator".to_vec(),
+            1,
+            [9u8; 32],
+            vec![],
+        )
+        .expect("builds");
         assert_eq!(intent.action_type, DB_MIGRATION_ACTION_TYPE);
         // The stable target is the ids only, derived by the codec.
         assert_eq!(intent.target, {
@@ -159,15 +165,28 @@ mod tests {
     #[test]
     fn the_agent_cannot_forge_the_plan_digest_a_changed_plan_changes_the_commitment() {
         let registry = default_registry();
-        let base = build_migration_action_intent(&registry, &input(), b"svc".to_vec(), 1, [9u8; 32], vec![])
-            .unwrap()
-            .parameters_commitment;
+        let base = build_migration_action_intent(
+            &registry,
+            &input(),
+            b"svc".to_vec(),
+            1,
+            [9u8; 32],
+            vec![],
+        )
+        .unwrap()
+        .parameters_commitment;
         let mut tampered = input();
         tampered.migration_plan = b"DROP TABLE orders;".to_vec();
-        let changed =
-            build_migration_action_intent(&registry, &tampered, b"svc".to_vec(), 1, [9u8; 32], vec![])
-                .unwrap()
-                .parameters_commitment;
+        let changed = build_migration_action_intent(
+            &registry,
+            &tampered,
+            b"svc".to_vec(),
+            1,
+            [9u8; 32],
+            vec![],
+        )
+        .unwrap()
+        .parameters_commitment;
         assert_ne!(base, changed, "a different plan must change the commitment");
     }
 

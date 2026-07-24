@@ -26,34 +26,41 @@ use piteka_storage::{
 
 use crate::Clock;
 
-/// The result of proposing an action request.
+// The four use-case results below name the use case that produced them rather
+// than the status it left behind. The short forms (`Proposed`, `Approved`,
+// `Rejected`, `Revoked`) collided head-on with
+// [`ActionRequestStatus`]'s variants of the same spelling, so a reader of
+// `piteka_application::Approved` could not tell whether it was a lifecycle state
+// or the complete outcome of a named use case. It is the latter.
+
+/// The complete outcome of proposing an action request.
 #[derive(Debug)]
-pub struct Proposed {
+pub struct ProposeActionRequestResult {
     /// The request that was created.
     pub request: ActionRequest,
 }
 
-/// The result of approving an action request.
+/// The complete outcome of approving an action request.
 #[derive(Debug)]
-pub struct Approved {
+pub struct ApproveActionRequestResult {
     /// The updated request (now in `Approved` status).
     pub request: ActionRequest,
     /// The approval decision that was recorded.
     pub decision: ApprovalDecision,
 }
 
-/// The result of rejecting an action request.
+/// The complete outcome of rejecting an action request.
 #[derive(Debug)]
-pub struct Rejected {
+pub struct RejectActionRequestResult {
     /// The updated request (now in `Rejected` status).
     pub request: ActionRequest,
     /// The rejection decision that was recorded.
     pub decision: ApprovalDecision,
 }
 
-/// The result of revoking an approved action request.
+/// The complete outcome of revoking an approved action request.
 #[derive(Debug)]
-pub struct Revoked {
+pub struct RevokeActionRequestResult {
     /// The updated request (now in `Revoked` status).
     pub request: ActionRequest,
 }
@@ -180,7 +187,7 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
         request_id: impl Into<String>,
         requested_by: UserId,
         intent_id_hex: Option<String>,
-    ) -> Result<Proposed, ActionRequestUseCaseError> {
+    ) -> Result<ProposeActionRequestResult, ActionRequestUseCaseError> {
         let now = self.ports.clock().unix_seconds() as i64;
         let request = ActionRequest {
             request_id: request_id.into(),
@@ -212,7 +219,7 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
             )
             .await?;
 
-        Ok(Proposed { request })
+        Ok(ProposeActionRequestResult { request })
     }
 
     /// Approves an action request.
@@ -235,7 +242,7 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
         approver_id: UserId,
         intent_id_hex: Option<String>,
         expected_version: i64,
-    ) -> Result<Approved, ActionRequestUseCaseError> {
+    ) -> Result<ApproveActionRequestResult, ActionRequestUseCaseError> {
         let now = self.ports.clock().unix_seconds() as i64;
 
         // Verify the request exists and is Pending.
@@ -318,7 +325,7 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
                     .await?
                     .expect("CAS applied but request vanished");
 
-                Ok(Approved {
+                Ok(ApproveActionRequestResult {
                     request: updated_request,
                     decision,
                 })
@@ -346,7 +353,7 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
         approver_id: UserId,
         intent_id_hex: Option<String>,
         expected_version: i64,
-    ) -> Result<Rejected, ActionRequestUseCaseError> {
+    ) -> Result<RejectActionRequestResult, ActionRequestUseCaseError> {
         let now = self.ports.clock().unix_seconds() as i64;
 
         let request = self
@@ -416,7 +423,7 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
                     .await?
                     .expect("CAS applied but request vanished");
 
-                Ok(Rejected {
+                Ok(RejectActionRequestResult {
                     request: updated_request,
                     decision,
                 })
@@ -443,7 +450,7 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
         request_id: &str,
         approver_id: UserId,
         expected_version: i64,
-    ) -> Result<Revoked, ActionRequestUseCaseError> {
+    ) -> Result<RevokeActionRequestResult, ActionRequestUseCaseError> {
         let now = self.ports.clock().unix_seconds() as i64;
 
         let request = self
@@ -498,7 +505,7 @@ impl<P: ActionRequestPorts> ActionRequestUseCase<P> {
                     .await?
                     .expect("CAS applied but request vanished");
 
-                Ok(Revoked {
+                Ok(RevokeActionRequestResult {
                     request: updated_request,
                 })
             }

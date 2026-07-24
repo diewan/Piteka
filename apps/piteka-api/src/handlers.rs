@@ -12,10 +12,10 @@ use piteka_domain::UserId;
 use piteka_storage::ports::ReceiptProjectionStore;
 
 use crate::TestPorts;
-use crate::error::{ApiError, ErrorResponse};
+use crate::error::{ApiError, ErrorResponseV1};
 use crate::models::{
-    ActionRequestResponse, ActionRequestSummary, ApproveRequest, CreateActionRequestRequest,
-    RejectRequest, RevokeRequest,
+    ActionRequestResponseV1, ActionRequestSummaryDtoV1, ApproveActionRequestRequestV1,
+    CreateActionRequestRequestV1, RejectActionRequestRequestV1, RevokeActionRequestRequestV1,
 };
 
 /// Optional idempotency key extracted from the request header.
@@ -26,7 +26,7 @@ impl<S> FromRequestParts<S> for IdempotencyKey
 where
     S: Send + Sync,
 {
-    type Rejection = (StatusCode, Json<ErrorResponse>);
+    type Rejection = (StatusCode, Json<ErrorResponseV1>);
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         let key = parts
@@ -48,9 +48,9 @@ pub async fn list_action_requests(
 ) -> Response {
     match use_case.list_requests().await {
         Ok(requests) => {
-            let summaries: Vec<ActionRequestSummary> = requests
+            let summaries: Vec<ActionRequestSummaryDtoV1> = requests
                 .into_iter()
-                .map(|r| ActionRequestSummary {
+                .map(|r| ActionRequestSummaryDtoV1 {
                     id: r.request_id,
                     requested_by: r.requested_by,
                     status: r.status.into(),
@@ -87,7 +87,7 @@ pub async fn get_action_request(
         Err(err) => return ApiError::from(err).into_response(),
     };
 
-    let response = ActionRequestResponse {
+    let response = ActionRequestResponseV1 {
         id: request.request_id,
         requested_by: request.requested_by,
         intent_id: request.intent_id_hex,
@@ -108,7 +108,7 @@ pub async fn get_action_request(
 pub async fn propose_action_request(
     State(use_case): State<ActionRequestUseCase<TestPorts>>,
     _idempotency_key: IdempotencyKey,
-    Json(body): Json<CreateActionRequestRequest>,
+    Json(body): Json<CreateActionRequestRequestV1>,
 ) -> Response {
     // Validate request body
     if body.requested_by.is_empty() {
@@ -129,7 +129,7 @@ pub async fn propose_action_request(
     };
 
     let request = proposed.request;
-    let response = ActionRequestResponse {
+    let response = ActionRequestResponseV1 {
         id: request.request_id,
         requested_by: request.requested_by,
         intent_id: request.intent_id_hex,
@@ -150,7 +150,7 @@ pub async fn approve_action_request(
     State(use_case): State<ActionRequestUseCase<TestPorts>>,
     _idempotency_key: IdempotencyKey,
     Path(request_id): Path<String>,
-    Json(body): Json<ApproveRequest>,
+    Json(body): Json<ApproveActionRequestRequestV1>,
 ) -> Response {
     if body.approver_id.is_empty() {
         return ApiError::bad_request("EMPTY_APPROVER_ID", "The `approver_id` field is required")
@@ -175,7 +175,7 @@ pub async fn approve_action_request(
         Err(err) => return ApiError::from(err).into_response(),
     };
 
-    let response = ActionRequestResponse {
+    let response = ActionRequestResponseV1 {
         id: approved.request.request_id,
         requested_by: approved.request.requested_by,
         intent_id: approved.request.intent_id_hex,
@@ -196,7 +196,7 @@ pub async fn reject_action_request(
     State(use_case): State<ActionRequestUseCase<TestPorts>>,
     _idempotency_key: IdempotencyKey,
     Path(request_id): Path<String>,
-    Json(body): Json<RejectRequest>,
+    Json(body): Json<RejectActionRequestRequestV1>,
 ) -> Response {
     if body.approver_id.is_empty() {
         return ApiError::bad_request("EMPTY_APPROVER_ID", "The `approver_id` field is required")
@@ -221,7 +221,7 @@ pub async fn reject_action_request(
         Err(err) => return ApiError::from(err).into_response(),
     };
 
-    let response = ActionRequestResponse {
+    let response = ActionRequestResponseV1 {
         id: rejected.request.request_id,
         requested_by: rejected.request.requested_by,
         intent_id: rejected.request.intent_id_hex,
@@ -242,7 +242,7 @@ pub async fn revoke_action_request(
     State(use_case): State<ActionRequestUseCase<TestPorts>>,
     _idempotency_key: IdempotencyKey,
     Path(request_id): Path<String>,
-    Json(body): Json<RevokeRequest>,
+    Json(body): Json<RevokeActionRequestRequestV1>,
 ) -> Response {
     if body.approver_id.is_empty() {
         return ApiError::bad_request("EMPTY_APPROVER_ID", "The `approver_id` field is required")
@@ -264,7 +264,7 @@ pub async fn revoke_action_request(
         Err(err) => return ApiError::from(err).into_response(),
     };
 
-    let response = ActionRequestResponse {
+    let response = ActionRequestResponseV1 {
         id: revoked.request.request_id,
         requested_by: revoked.request.requested_by,
         intent_id: revoked.request.intent_id_hex,

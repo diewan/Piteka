@@ -18,7 +18,7 @@ use piteka_github::intent::{
 };
 use piteka_parwana::ParwanaContract;
 use piteka_parwana::protocol::{
-    ActionIntent, ActionIntentWire, GitHubDeploymentIntentV1, GitHubDeploymentIntentV1Wire,
+    ActionIntent, ActionIntentWireV1, GitHubDeploymentIntentV1, GitHubDeploymentIntentV1Wire,
     RequiredContexts,
 };
 use piteka_ports::github::{
@@ -197,7 +197,7 @@ fn golden_wire_round_trip_preserves_fields() {
         .unwrap();
 
     // Convert to wire format.
-    let wire = ActionIntentWire::from(&normalized.intent);
+    let wire = ActionIntentWireV1::from(&normalized.intent);
 
     // Verify wire fields match the intent.
     assert_eq!(wire.action_type, "github.deployment");
@@ -904,7 +904,7 @@ fn normalized_intent_matches_parwana_profile_vectors() {
 
     // The normalized intent should be constructible from the wire format
     // and produce the same canonical bytes.
-    let wire = ActionIntentWire::from(&normalized.intent);
+    let wire = ActionIntentWireV1::from(&normalized.intent);
     let decoded = piteka_parwana::ParwanaContract::bind()
         .unwrap()
         .decode_action_intent(wire)

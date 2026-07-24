@@ -14,7 +14,7 @@ use piteka_application::SystemClock;
 use piteka_application::mcp::McpIdentity;
 use piteka_domain::OrganizationId;
 use piteka_ports::github::{
-    DeploymentCreated, GitHubAppError, GitHubAppPort, GitHubEnvironmentName,
+    DeploymentCreationResponse, GitHubAppError, GitHubAppPort, GitHubEnvironmentName,
     GitHubInstallationContext, GitHubInstallationId, GitHubRepositoryId, GitHubWebhookPayload,
     GitHubWebhookSecret, WebhookSignatureResult,
 };
@@ -74,10 +74,10 @@ impl GitHubAppPort for FakeGitHub {
         auto_merge: bool,
         _payload_commitment: &str,
         attempt_digest: [u8; 32],
-    ) -> Result<DeploymentCreated, GitHubAppError> {
+    ) -> Result<DeploymentCreationResponse, GitHubAppError> {
         assert!(!auto_merge, "auto_merge must be false");
         self.calls.fetch_add(1, Ordering::SeqCst);
-        Ok(DeploymentCreated {
+        Ok(DeploymentCreationResponse {
             deployment_id: DEPLOYMENT_ID,
             url: format!("https://github.test/deployments/{DEPLOYMENT_ID}"),
             attempt_digest,

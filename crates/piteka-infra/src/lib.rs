@@ -4,7 +4,7 @@ pub mod anchor;
 pub mod chain_anchor;
 pub mod kms;
 
-pub use anchor::LocalCsvSealAnchor;
+pub use anchor::InMemoryCsvSealAnchor;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

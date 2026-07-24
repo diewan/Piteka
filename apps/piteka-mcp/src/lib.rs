@@ -104,7 +104,7 @@ pub async fn handle<B: AccountabilityTools>(
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use piteka_application::mcp::{ExecuteDeployment, McpError, RequestDeployment};
+    use piteka_application::mcp::{ExecuteDeploymentInput, McpError, RequestDeploymentInput};
 
     struct Backend;
     #[async_trait]
@@ -121,7 +121,7 @@ mod tests {
         async fn request_deployment(
             &self,
             identity: &McpIdentity,
-            _: RequestDeployment,
+            _: RequestDeploymentInput,
         ) -> Result<Value, McpError> {
             Ok(json!({"status":"pending","tenant":identity.tenant_id()}))
         }
@@ -135,7 +135,7 @@ mod tests {
         async fn execute_approved_deployment(
             &self,
             _: &McpIdentity,
-            _: ExecuteDeployment,
+            _: ExecuteDeploymentInput,
         ) -> Result<Value, McpError> {
             Ok(json!({"dispatched":true}))
         }
@@ -240,7 +240,7 @@ mod tests {
         async fn request_deployment(
             &self,
             _: &McpIdentity,
-            _: RequestDeployment,
+            _: RequestDeploymentInput,
         ) -> Result<Value, McpError> {
             unreachable!()
         }
@@ -250,7 +250,7 @@ mod tests {
         async fn execute_approved_deployment(
             &self,
             _: &McpIdentity,
-            _: ExecuteDeployment,
+            _: ExecuteDeploymentInput,
         ) -> Result<Value, McpError> {
             unreachable!()
         }

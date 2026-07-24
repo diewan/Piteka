@@ -2,7 +2,7 @@
 //!
 //! [`ChainAnchorPort`] produces and reads back an on-chain anchor for an
 //! accountability commitment. It is dependency-light: the Parwana
-//! `ChainAnchor` value type is mapped from [`ChainAnchorRecord`] in
+//! `ChainCommitmentAnchorEvidence` value type is mapped from [`ChainAnchorRecord`] in
 //! `piteka-parwana`, so this crate stays free of the protocol SDK. Like seal
 //! anchoring, it runs asynchronously around the authoritative Postgres
 //! reservation, never inside the provider dispatch call, and the real on-chain
@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use crate::anchor::{AnchorError, Digest32};
 
 /// A backend-neutral projection of an on-chain commitment anchor and its
-/// finality reading. Maps 1:1 to a Parwana `ChainAnchor`.
+/// finality reading. Maps 1:1 to a Parwana `ChainCommitmentAnchorEvidence`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChainAnchorRecord {
     /// The anchored commitment digest.
@@ -38,7 +38,8 @@ impl ChainAnchorRecord {
     /// Whether the reading has reached reorg-safe finality.
     #[must_use]
     pub fn is_final(&self) -> bool {
-        self.required_confirmations > 0 && self.observed_confirmations >= self.required_confirmations
+        self.required_confirmations > 0
+            && self.observed_confirmations >= self.required_confirmations
     }
 }
 

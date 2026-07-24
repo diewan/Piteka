@@ -6,7 +6,7 @@
 //!
 //! 1. Receive raw webhook payload with headers (delivery ID, event type, signature).
 //! 2. Validate the GitHub HMAC-SHA256 signature — reject immediately on failure.
-//! 3. Check for replay via delivery ID deduplication in `WebhookReceiptStore`.
+//! 3. Check for replay via delivery ID deduplication in `WebhookDeliveryStore`.
 //! 4. Record the raw payload digest for forensic reconstruction.
 //! 5. Dispatch the validated, deduplicated event to the application-level
 //!    [`WebhookEventProcessor`] for downstream handling.
@@ -23,8 +23,8 @@
 use async_trait::async_trait;
 use piteka_ports::github::GitHubWebhookPayload;
 use piteka_storage::digest::ContentDigest;
-use piteka_storage::model::WebhookReceipt;
-use piteka_storage::ports::{AuditLog, WebhookReceiptStore};
+use piteka_storage::model::WebhookDeliveryRecord;
+use piteka_storage::ports::{AuditLog, WebhookDeliveryStore};
 
 use crate::webhook_ingestion::error::{WebhookError, WebhookResult};
 
@@ -102,7 +102,7 @@ impl LastReceivedTracker {
 pub struct WebhookIngestionPorts<P, W, A>
 where
     P: WebhookEventProcessor,
-    W: WebhookReceiptStore,
+    W: WebhookDeliveryStore,
     A: AuditLog,
 {
     processor: P,
@@ -114,7 +114,7 @@ where
 impl<P, W, A> WebhookIngestionPorts<P, W, A>
 where
     P: WebhookEventProcessor,
-    W: WebhookReceiptStore,
+    W: WebhookDeliveryStore,
     A: AuditLog,
 {
     pub fn new(processor: P, receipt_store: W, audit_log: A) -> Self {
@@ -135,7 +135,7 @@ where
 pub struct WebhookIngestionUseCase<P, W, A>
 where
     P: WebhookEventProcessor,
-    W: WebhookReceiptStore,
+    W: WebhookDeliveryStore,
     A: AuditLog,
 {
     tenant: piteka_storage::TenantScope,
@@ -145,7 +145,7 @@ where
 impl<P, W, A> WebhookIngestionUseCase<P, W, A>
 where
     P: WebhookEventProcessor,
-    W: WebhookReceiptStore,
+    W: WebhookDeliveryStore,
     A: AuditLog,
 {
     pub fn new(tenant: piteka_storage::TenantScope, ports: WebhookIngestionPorts<P, W, A>) -> Self {
@@ -158,7 +158,7 @@ where
     /// the following steps in order:
     ///
     /// 1. **Signature validation** — delegates to the GitHub adapter.
-    /// 2. **Replay/dedup check** — checks `WebhookReceiptStore` for the delivery ID.
+    /// 2. **Replay/dedup check** — checks `WebhookDeliveryStore` for the delivery ID.
     /// 3. **Raw digest recording** — computes and stores the SHA-256 digest of
     ///    the raw payload for forensic reconstruction.
     /// 4. **Out-of-order detection** — checks if the event arrived significantly
@@ -213,7 +213,7 @@ where
         }
 
         // Step 3: Record the receipt (idempotent — rejects duplicates).
-        let receipt = WebhookReceipt {
+        let receipt = WebhookDeliveryRecord {
             delivery_id: payload.delivery_id.clone(),
             source: "github".to_string(),
             raw_digest,

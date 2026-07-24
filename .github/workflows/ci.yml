@@ -15,4 +15,7 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
-
+      - name: Check naming and OpenAPI compatibility contracts
+        run: |
+          cargo test --test naming_constitution
+          ./scripts/check_openapi.sh

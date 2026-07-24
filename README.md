@@ -50,6 +50,11 @@ Key terms a newcomer will meet in Piteka:
 | Anchor | Keyword | Publishing a commitment to a chain as optional timestamp/settlement evidence. | A notary stamp proving the record existed at a point in time. |
 | Verifier | Component | The side-effect-free logic that turns evidence + rules into a deterministic verdict. | A referee applying a fixed rulebook to reach the same call every time. |
 
+New to the codebase? [`docs/naming-walkthrough.md`](docs/naming-walkthrough.md)
+follows one production deployment through every layer and names the exact type at
+each step, so you can tell from a name alone who owns a value and what it does not
+prove.
+
 Local configuration in `config/local.toml` is deliberately secret-free.
 Credentials must be supplied through environment variables and must never be
 committed.

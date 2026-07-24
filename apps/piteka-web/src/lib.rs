@@ -28,21 +28,29 @@ use serde::Deserialize;
 /// digest are populated from the same immutable field.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ApprovalSummary {
-    /// Exact canonical intent.
-    pub intent: piteka_application::CanonicalIntent,
-    /// Digest both displayed and submitted.
+    /// The exact server-derived approval-ceremony intent being displayed.
+    pub intent: piteka_application::ApprovalCeremonyIntent,
+    /// Approval-ceremony digest both displayed and submitted.
+    ///
+    /// This is not the Parwana intent id; it is the local binding digest that
+    /// proves the approver signed exactly what was rendered.
     pub digest_hex: String,
 }
 
 impl ApprovalSummary {
-    /// Creates a summary only from the canonical server-side intent.
-    pub fn new(intent: piteka_application::CanonicalIntent) -> Self {
+    /// Creates a summary only from the server-derived approval-ceremony intent.
+    pub fn new(intent: piteka_application::ApprovalCeremonyIntent) -> Self {
         let digest_hex = intent.digest_hex();
         Self { intent, digest_hex }
     }
 
     /// Renders an accessible security context. The mutation handler must still
-    /// verify this digest against a freshly loaded canonical intent.
+    /// verify this digest against a freshly loaded approval-ceremony intent.
+    ///
+    /// The digest is labelled "Approval digest" rather than "Intent digest":
+    /// it is a Piteka-local binding over the displayed fields, and an operator
+    /// must not read it as the Parwana intent id, which is a different value
+    /// with different authority.
     pub fn render_security_context(&self) -> String {
         format!(
             "<section aria-labelledby=\"approval-context-title\">\
@@ -50,7 +58,7 @@ impl ApprovalSummary {
              <dl><dt>Environment</dt><dd>{}</dd>\
              <dt>Repository</dt><dd>{}</dd>\
              <dt>Revision</dt><dd>{}</dd>\
-             <dt>Intent digest</dt><dd id=\"intent-digest\"><code>{}</code></dd></dl>\
+             <dt>Approval digest</dt><dd id=\"intent-digest\"><code>{}</code></dd></dl>\
              <input type=\"hidden\" name=\"displayed_intent_digest\" value=\"{}\" \
              aria-describedby=\"intent-digest\">\
              </section>",

@@ -9,7 +9,7 @@ use piteka_application::{
 };
 use piteka_domain::{OrganizationId, UserId};
 use piteka_github::{GitHubAppAdapter, InMemorySecretResolver};
-use piteka_infra::LocalCsvSealAnchor;
+use piteka_infra::InMemoryCsvSealAnchor;
 use piteka_ports::github::{
     GitHubAppPort, GitHubEnvironmentName, GitHubInstallationContext, GitHubInstallationId,
     GitHubRepositoryId,
@@ -23,7 +23,6 @@ use sha2::{Digest, Sha256};
 
 #[derive(Clone)]
 struct DemoPorts {
-    tenant: piteka_storage::TenantScope,
     requests: Arc<InMemoryActionRequestStore>,
     decisions: Arc<InMemoryApprovalDecisionStore>,
     mandates: piteka_storage::postgres::PgMandateProjectionStore,
@@ -34,14 +33,10 @@ struct DemoPorts {
 }
 
 impl DemoPorts {
-    async fn connect(
-        database_url: &str,
-        tenant: piteka_storage::TenantScope,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    async fn connect(database_url: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let pool = piteka_storage::postgres::connect(database_url).await?;
         piteka_storage::postgres::run_migrations(&pool).await?;
         Ok(Self {
-            tenant,
             requests: Arc::new(InMemoryActionRequestStore::default()),
             decisions: Arc::new(InMemoryApprovalDecisionStore::default()),
             mandates: piteka_storage::postgres::PgMandateProjectionStore::new(pool.clone()),
@@ -124,7 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tenant = piteka_storage::TenantScope::new(
         env::var("PITEKA_TENANT_ID").unwrap_or_else(|_| "controlled-demo".to_string()),
     )?;
-    let ports = DemoPorts::connect(&required("DATABASE_URL")?, tenant.clone()).await?;
+    let ports = DemoPorts::connect(&required("DATABASE_URL")?).await?;
     let actions = ActionRequestUseCase::new(tenant.clone(), ports.clone());
     actions
         .propose(
@@ -242,7 +237,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // is a corroboration gap, never a reason to fail an otherwise-completed mandate.
     let anchor = AnchorUseCase::new(
         tenant.clone(),
-        LocalCsvSealAnchor::new(),
+        InMemoryCsvSealAnchor::new(),
         ports.seals.clone(),
     );
     match anchor

@@ -130,6 +130,11 @@ impl<S: InvestigatorCaseStore, E: EvidenceObjectStore, C: Clock> CaseUseCase<S, 
         .await
     }
 
+    // Every parameter here is a distinct authorization or identity input, and
+    // bundling them into one struct would let a caller assemble a partly-filled
+    // request without the compiler noticing a missing field. The long signature
+    // is the point: each value must be supplied explicitly at the call site.
+    #[allow(clippy::too_many_arguments)]
     async fn append_evidence_event(
         &self,
         session: &AuthenticatedSession,

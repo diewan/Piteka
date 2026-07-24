@@ -8,9 +8,17 @@
 use async_trait::async_trait;
 use std::collections::BTreeMap;
 
-/// A normalized, tenant-visible observation returned by the observation plane.
+/// A normalized, tenant-visible observation returned by the Tuppira observation
+/// plane.
+///
+/// The `Tuppira` qualifier names the vocabulary owner: Tuppira produces and defines
+/// these observations, Piteka only reads them. It earns the reserved `Observation`
+/// role because it carries source identity (`source_id`, `source_event_id`),
+/// acquisition provenance (`observed_at`, `collection_run_id`), and explicit
+/// uncertainty (`retraction_status`, `supersedes`). It is evidence, never authority:
+/// see [`ObservationQueryResult::permits_execution`].
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Observation {
+pub struct TuppiraObservation {
     pub observation_id: String,
     pub source_id: String,
     pub source_event_id: String,
@@ -29,8 +37,13 @@ pub struct Observation {
 }
 
 /// Collection progress reported for one observation source.
+///
+/// Qualified by `Observation` to separate it from `piteka_domain::Health`, which
+/// reports this service's own readiness. This one reports how far an external
+/// collector has got, which is what turns missing evidence into an explicit gap
+/// rather than a conclusion.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SourceHealth {
+pub struct ObservationSourceHealth {
     pub source_id: String,
     pub connector_kind: String,
     pub display_name: String,
@@ -61,9 +74,12 @@ pub trait ObservationPort: Send + Sync {
         &self,
         tenant_id: &str,
         observation_id: &str,
-    ) -> Result<Vec<Observation>, ObservationError>;
+    ) -> Result<Vec<TuppiraObservation>, ObservationError>;
 
-    async fn source_health(&self, tenant_id: &str) -> Result<Vec<SourceHealth>, ObservationError>;
+    async fn source_health(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<ObservationSourceHealth>, ObservationError>;
 }
 
 /// Tenant-scoped observation query.
@@ -83,8 +99,8 @@ pub struct EvidenceGap {
 /// Read result suitable for investigation and evidence collection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObservationQueryResult {
-    pub lineage: Vec<Observation>,
-    pub source_health: Vec<SourceHealth>,
+    pub lineage: Vec<TuppiraObservation>,
+    pub source_health: Vec<ObservationSourceHealth>,
     pub evidence_gaps: Vec<EvidenceGap>,
 }
 
@@ -141,7 +157,7 @@ impl<P: ObservationPort> ObservationUseCase<P> {
             Err(error) => return gap_for_error("observation_source_health_unavailable", error),
         };
 
-        let health_by_source: BTreeMap<&str, &SourceHealth> = source_health
+        let health_by_source: BTreeMap<&str, &ObservationSourceHealth> = source_health
             .iter()
             .map(|health| (health.source_id.as_str(), health))
             .collect();
@@ -206,23 +222,30 @@ mod tests {
     use super::*;
 
     struct Stub {
-        lineage: Result<Vec<Observation>, ObservationError>,
-        health: Result<Vec<SourceHealth>, ObservationError>,
+        lineage: Result<Vec<TuppiraObservation>, ObservationError>,
+        health: Result<Vec<ObservationSourceHealth>, ObservationError>,
     }
 
     #[async_trait]
     impl ObservationPort for Stub {
-        async fn lineage(&self, _: &str, _: &str) -> Result<Vec<Observation>, ObservationError> {
+        async fn lineage(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<Vec<TuppiraObservation>, ObservationError> {
             self.lineage.clone()
         }
 
-        async fn source_health(&self, _: &str) -> Result<Vec<SourceHealth>, ObservationError> {
+        async fn source_health(
+            &self,
+            _: &str,
+        ) -> Result<Vec<ObservationSourceHealth>, ObservationError> {
             self.health.clone()
         }
     }
 
-    fn observation() -> Observation {
-        Observation {
+    fn observation() -> TuppiraObservation {
+        TuppiraObservation {
             observation_id: "obs-1".into(),
             source_id: "github".into(),
             source_event_id: "deployment-1".into(),
@@ -241,8 +264,8 @@ mod tests {
         }
     }
 
-    fn health() -> SourceHealth {
-        SourceHealth {
+    fn health() -> ObservationSourceHealth {
+        ObservationSourceHealth {
             source_id: "github".into(),
             connector_kind: "github".into(),
             display_name: "GitHub".into(),

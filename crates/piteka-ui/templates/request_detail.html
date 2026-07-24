@@ -31,39 +31,47 @@
   <div class="pk-intent-panel-body">
     <div class="pk-intent-field">
       <span class="pk-intent-field-label">Repository</span>
-      <span class="pk-intent-field-value">{{ intent.repository_owner }}/{{ intent.repository_name }}</span>
+      <span class="pk-intent-field-value">
+        {% if let Some(repository) = intent.repository %}{{ repository }}
+        {% else %}<span class="pk-status-chip pk-status-chip--indeterminate">Not recorded in this view</span>{% endif %}
+      </span>
     </div>
     <div class="pk-intent-field">
       <span class="pk-intent-field-label">Commit</span>
       <span class="pk-intent-field-value">
-        <span class="pk-hash-field" tabindex="0" role="button" aria-label="Copy commit SHA {{ intent.commit_sha }}">
-          {{ intent.commit_sha|truncate_hash }}
-          <span class="hash-tooltip">{{ intent.commit_sha }}</span>
+        {% if let Some(commit_sha) = intent.commit_sha %}
+        <span class="pk-hash-field" tabindex="0" role="button" aria-label="Copy commit SHA {{ commit_sha }}">
+          {{ commit_sha|truncate_hash }}
+          <span class="hash-tooltip">{{ commit_sha }}</span>
         </span>
+        {% else %}<span class="pk-status-chip pk-status-chip--indeterminate">Not recorded in this view</span>{% endif %}
       </span>
     </div>
     <div class="pk-intent-field">
       <span class="pk-intent-field-label">Environment</span>
       <span class="pk-intent-field-value">
-        {{ intent.environment_name }}
-        {% if intent.production_environment %}
-        <span class="pk-status-chip pk-status-chip--not-met" style="margin-left:var(--space-sm);">Production</span>
-        {% endif %}
+        {% if let Some(environment_name) = intent.environment_name %}{{ environment_name }}
+        {% else %}<span class="pk-status-chip pk-status-chip--indeterminate">Not recorded in this view</span>{% endif %}
       </span>
     </div>
     <div class="pk-intent-field">
       <span class="pk-intent-field-label">Task</span>
-      <span class="pk-intent-field-value">{{ intent.task }}</span>
+      <span class="pk-intent-field-value">
+        {% if let Some(task) = intent.task %}{{ task }}
+        {% else %}<span class="pk-status-chip pk-status-chip--indeterminate">Not recorded in this view</span>{% endif %}
+      </span>
     </div>
     <fieldset class="pk-deployment-controls" disabled>
       <legend>Deployment controls</legend>
+      <p class="pk-intent-field-label">
+        Fixed by the GitHubDeploymentIntentV1 profile for every request. These are
+        profile constants, not values read from this request.
+      </p>
       <dl>
-        <dt>Commit checks</dt><dd>All submitted checks</dd>
+        <dt>Commit checks</dt><dd>Administrator-configured; an agent cannot weaken them</dd>
         <dt>Automatic merge</dt><dd>Off</dd>
-        <dt>Deployment task</dt><dd>{{ intent.task }}</dd>
         <dt>Environment type</dt><dd>Production</dd>
         <dt>Correlation payload</dt><dd>Piteka-controlled</dd>
-        <dt>Gate-policy fingerprint</dt><dd><code>{{ intent.digest|truncate_hash }}</code></dd>
       </dl>
     </fieldset>
     <div class="pk-intent-field">
@@ -82,10 +90,12 @@
     <div class="pk-intent-field">
       <span class="pk-intent-field-label">Intent fingerprint</span>
       <span class="pk-intent-field-value">
-        <span class="pk-hash-field" tabindex="0" role="button" aria-label="Copy intent fingerprint {{ intent.digest }}">
-          {{ intent.digest|truncate_hash }}
-          <span class="hash-tooltip">{{ intent.digest }}</span>
+        {% if let Some(intent_id_hex) = intent.intent_id_hex %}
+        <span class="pk-hash-field" tabindex="0" role="button" aria-label="Copy intent fingerprint {{ intent_id_hex }}">
+          {{ intent_id_hex|truncate_hash }}
+          <span class="hash-tooltip">{{ intent_id_hex }}</span>
         </span>
+        {% else %}<span class="pk-status-chip pk-status-chip--indeterminate">No intent bound yet</span>{% endif %}
       </span>
     </div>
     <div class="pk-intent-field">
@@ -96,24 +106,6 @@
     </div>
   </div>
 </div>
-
-<!-- Evidence requirements -->
-{% if !intent.evidence_requirements.is_empty() %}
-<div class="pk-card pk-mb-lg">
-  <div class="pk-card-header">
-    <h3>Evidence requirements</h3>
-    <span class="pk-provenance-chip">Recorded by Piteka</span>
-  </div>
-  <ul style="list-style:none;padding:0;">
-    {% for req in intent.evidence_requirements %}
-    <li style="padding:var(--space-xs) 0;font-size:0.875rem;color:var(--ink-1);">
-      <span aria-hidden="true" style="color:var(--ink-3);margin-right:var(--space-xs);">—</span>
-      {{ req }}
-    </li>
-    {% endfor %}
-  </ul>
-</div>
-{% endif %}
 
 <!-- Decisions history -->
 {% if !request.decisions.is_empty() %}

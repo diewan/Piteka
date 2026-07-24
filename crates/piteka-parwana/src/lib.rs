@@ -33,33 +33,33 @@ use core::fmt;
 /// public [`csv_sdk::accountability`] facade.
 pub mod protocol {
     pub use csv_sdk::accountability::{
-        ACCOUNTABILITY_OBJECT_VERSION, ACCOUNTABILITY_PROTOCOL_VERSION, AccountabilityObjectKind,
-        ActionIntent, ActionIntentWire, ActionMandate, AssuranceProfile,
-        CanonicalAccountabilityObjectWire, DisclosedObject, DisputeBundle, EvidenceKind,
-        EvidenceNode, EvidenceNodeId, ExecutionAttempt, ExecutionReceipt, GateProfileId,
-        GitHubDeploymentIntentV1, GitHubDeploymentIntentV1Wire, IntentError, IntentId,
-        MandateSignatureEnvelope, ObjectVersion, ProfileCodec, ProfileDescriptor,
-        ProfileId, ProfileRegistry, ProtocolVersion, RequiredContexts, RequiredContextsWire,
-        SourceLocator, VerificationContext, WithheldObject, bundle_object_digest,
-        default_registry, github_deployment_descriptor, validate_evidence_graph,
-        AuthorityAuthenticity, AuthorityConclusion, AuthorityLink, AuthorityReason,
-        AuthorityReconstruction, AuthoritySourceCompleteness, MandateId,
-        AUTHORITY_RECONSTRUCTION_REGISTRY_ID, evaluate_authority_reconstruction,
+        ACCOUNTABILITY_OBJECT_VERSION, ACCOUNTABILITY_PROTOCOL_VERSION,
+        AUTHORITY_RECONSTRUCTION_REGISTRY_ID, AccountabilityObjectKind, ActionIntent,
+        ActionIntentWireV1, ActionMandate, AssuranceProfile, AuthorityAuthenticity,
+        AuthorityConclusion, AuthorityLink, AuthorityReason, AuthorityReconstruction,
+        AuthoritySourceCompleteness, CanonicalAccountabilityObjectWire, DisclosedObject,
+        DisputeBundle, EvidenceKind, EvidenceNode, EvidenceNodeId, ExecutionAttempt,
+        ExecutionReceipt, GateProfileId, GitHubDeploymentIntentV1, GitHubDeploymentIntentV1Wire,
+        IntentError, IntentId, MandateId, MandateSignatureEnvelope, ObjectVersion, ProfileCodec,
+        ProfileDescriptor, ProfileId, ProfileRegistry, ProtocolVersion, RequiredContexts,
+        RequiredContextsWire, SourceLocator, VerificationContext, WithheldObject,
+        bundle_object_digest, default_registry, evaluate_authority_reconstruction,
+        github_deployment_descriptor, validate_evidence_graph,
+    };
+    pub use csv_sdk::accountability::{
+        CHAIN_COMMITMENT_ANCHOR_MEDIA_TYPE, ChainAnchorFinalityStatus,
+        ChainAnchorReconciliationResult, ChainAnchorSourceObservation,
+        ChainAnchorVerificationResult, ChainCommitmentAnchorEvidence,
+        EVIDENCE_CHAIN_COMMITMENT_ANCHOR, EVIDENCE_CSV_SEAL_COMMITMENT_ANCHOR,
+        EVIDENCE_CSV_SEAL_CONSUMPTION_RECORD, ExternalCommitmentAnchorReference,
+        SealConsumptionRecord, SingleUseAnchorAssessment, reconcile_chain_anchor_observations,
     };
     pub use csv_sdk::accountability::{
         DB_MIGRATION_ACTION_TYPE, DB_MIGRATION_PROFILE_ID, DbMigrationIntentV1, MigrationDirection,
         db_migration_descriptor,
     };
     pub use csv_sdk::accountability::{
-        PAYMENT_ACTION_TYPE, PAYMENT_PROFILE_ID, PaymentCodec, PaymentIntentV1,
-        payment_descriptor,
-    };
-    pub use csv_sdk::accountability::{
-        AnchorFinality, AnchorObservation, AnchorReconciliation, CHAIN_COMMITMENT_ANCHOR_MEDIA_TYPE,
-        ChainAnchor, ChainAnchorAssessment, CommitmentAnchorRecord,
-        EVIDENCE_CHAIN_COMMITMENT_ANCHOR, EVIDENCE_CSV_SEAL_COMMITMENT_ANCHOR,
-        EVIDENCE_CSV_SEAL_CONSUMPTION_RECORD, SealConsumptionRecord, SingleUseAnchorAssessment,
-        reconcile_anchor,
+        PAYMENT_ACTION_TYPE, PAYMENT_PROFILE_ID, PaymentCodec, PaymentIntentV1, payment_descriptor,
     };
 }
 
@@ -69,7 +69,7 @@ pub mod migration;
 use csv_sdk::accountability;
 
 use protocol::{
-    AccountabilityObjectKind, ActionIntent, ActionIntentWire, CanonicalAccountabilityObjectWire,
+    AccountabilityObjectKind, ActionIntent, ActionIntentWireV1, CanonicalAccountabilityObjectWire,
 };
 
 /// Exact Parwana contract package version this adapter is pinned to.
@@ -329,9 +329,9 @@ impl ParwanaContract {
     /// Parwana's canonical validation.
     pub fn decode_action_intent(
         &self,
-        wire: ActionIntentWire,
+        wire: ActionIntentWireV1,
     ) -> Result<ActionIntent, AdapterError> {
-        accountability::action_intent_from_wire(wire)
+        accountability::action_intent_from_json(wire)
             .map_err(|error| AdapterError::InvalidIntent(format!("{error:?}")))
     }
 

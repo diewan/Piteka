@@ -116,7 +116,7 @@ impl std::error::Error for DispatchError {
 
 /// The outcome of a successful reserve-and-dispatch.
 #[derive(Debug, Clone)]
-pub struct Dispatched {
+pub struct DispatchedExecution {
     /// The mandate id that was reserved.
     pub mandate_id_hex: String,
     /// The attempt id that was created.
@@ -138,7 +138,7 @@ pub struct Dispatched {
 
 /// The outcome of a failed reservation (concurrent winner).
 #[derive(Debug, Clone)]
-pub struct ReservationFailed {
+pub struct ReservationConflict {
     /// The mandate id that was contested.
     pub mandate_id_hex: String,
     /// The version currently held by the winner.
@@ -161,9 +161,9 @@ pub struct ProviderDispatchResult {
 #[derive(Debug)]
 pub enum DispatchOutcome {
     /// The mandate was reserved and dispatched successfully.
-    Dispatched(Dispatched),
+    Dispatched(DispatchedExecution),
     /// Another caller won the reservation.
-    ReservationFailed(ReservationFailed),
+    ReservationFailed(ReservationConflict),
     /// A second use of a terminal single-use mandate was rejected before any
     /// provider call. The appended audit event is the Piteka-produced evidence
     /// of the rejected attempt.
@@ -412,7 +412,7 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
                     )
                     .await?;
 
-                Ok(DispatchOutcome::Dispatched(Dispatched {
+                Ok(DispatchOutcome::Dispatched(DispatchedExecution {
                     mandate_id_hex: mandate_id_hex.to_string(),
                     attempt_id_hex,
                     intent_id_hex: intent_id_hex.to_string(),
@@ -466,7 +466,7 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
                         }));
                     }
                 }
-                Ok(DispatchOutcome::ReservationFailed(ReservationFailed {
+                Ok(DispatchOutcome::ReservationFailed(ReservationConflict {
                     mandate_id_hex: mandate_id_hex.to_string(),
                     winner_version: current_version,
                 }))
@@ -733,7 +733,7 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
 
                     // Update the dispatched result to reflect provider acceptance.
                     let dispatched_owned = dispatched.clone();
-                    Ok(DispatchOutcome::Dispatched(Dispatched {
+                    Ok(DispatchOutcome::Dispatched(DispatchedExecution {
                         provider_accepted: true,
                         github_deployment_id: Some(deploy_id),
                         ..dispatched_owned

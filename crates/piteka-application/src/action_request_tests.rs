@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::Clock;
 use crate::action_request::{
-    ActionRequestPorts, ActionRequestUseCase, ActionRequestUseCaseError, Approved,
+    ActionRequestPorts, ActionRequestUseCase, ActionRequestUseCaseError, ApproveActionRequestResult,
 };
 use piteka_domain::UserId;
 use piteka_storage::ActionRequestStatus;
@@ -316,7 +316,7 @@ async fn intent_id_is_bound_to_approval_not_prompt_text() {
         .await
         .unwrap();
 
-    let Approved { decision, .. } = uc
+    let ApproveActionRequestResult { decision, .. } = uc
         .approve("req-1", approver(), Some("intent-abc123".to_string()), 1)
         .await
         .unwrap();
