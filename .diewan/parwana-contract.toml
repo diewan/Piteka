@@ -1,14 +1,14 @@
 schema_version = 1
 consumer = "piteka"
 publisher = "github.com/diewan/parwana"
-contract_version = "0.1.5"
+contract_version = "0.1.10"
 protocol_version = "1.0.0"
 expires_on = "2027-01-16"
-corpus_digest = "9158785f49a9713c6cca44725e28552de4c4ca4735849aea4ef380626cff80cb"
+corpus_digest = "39869b9206ab0a78ce60673f30c1e726c2c2ec8260e79c7e9495aea3e35ee896"
 
 [source]
 kind = "commit"
-value = "9b3fd916cd99b5f72aa41d6540a9e7947675848f"
+value = "d6a393302a45094dd9d7a9938acc62de6f2df8dd"
 
 [compatibility]
 wire = "exact"
