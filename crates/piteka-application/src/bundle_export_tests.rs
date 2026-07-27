@@ -157,6 +157,222 @@ async fn manifest_discloses_a_stored_single_use_anchor_and_omits_an_absent_one()
     assert_eq!(anchor["anchor_backend"], "csv-seal.local.v1");
 }
 
+// ── The feed publishes only what Piteka observed and produced (PIT-NE-006) ──
+
+/// Builds an evidence node with the source and the two times stated separately.
+fn evidence_node(
+    node_id: &str,
+    source: piteka_storage::model::EvidenceSource,
+    collected_at: i64,
+    asserted_event_at: Option<i64>,
+) -> piteka_storage::model::EvidenceNodeRecord {
+    piteka_storage::model::EvidenceNodeRecord {
+        node_id_hex: node_id.to_string(),
+        registry_id: "diewan.evidence.observation.v1".to_string(),
+        source,
+        producer_identity: "producer".to_string(),
+        collected_at_unix_seconds: collected_at,
+        asserted_event_at_unix_seconds: asserted_event_at,
+        content_digest: piteka_storage::digest::ContentDigest::of(node_id.as_bytes()),
+        media_type: "application/json".to_string(),
+        disclosure_classification: "internal".to_string(),
+        relationships: Vec::new(),
+    }
+}
+
+/// A receipt with the given evidence already stored, and its exported manifest.
+async fn manifest_for(
+    dispatch: Vec<piteka_storage::model::EvidenceNodeRecord>,
+    target: Vec<piteka_storage::model::EvidenceNodeRecord>,
+) -> serde_json::Value {
+    use piteka_storage::ports::EvidenceNodeStore;
+
+    let receipt_store = InMemoryReceiptProjectionStore::default();
+    let evidence_store = InMemoryEvidenceNodeStore::default();
+    let seal_store = InMemorySealConsumptionStore::default();
+    let dispatch_refs: Vec<String> = dispatch.iter().map(|n| n.node_id_hex.clone()).collect();
+    let target_refs: Vec<String> = target.iter().map(|n| n.node_id_hex.clone()).collect();
+    for node in dispatch.into_iter().chain(target) {
+        evidence_store.insert(&tenant(), node).await.unwrap();
+    }
+    receipt_store
+        .insert(
+            &tenant(),
+            piteka_storage::model::ReceiptProjection {
+                receipt_id_hex: "rcpt-scope".into(),
+                mandate_id_hex: "mandate".into(),
+                intent_id_hex: "intent".into(),
+                attempt_id_hex: "attempt".into(),
+                outcome: piteka_storage::model::ReceiptOutcome::Succeeded,
+                created_at_unix_seconds: 1,
+                dispatch_evidence_refs: dispatch_refs,
+                target_evidence_refs: target_refs,
+                evidence_gaps: vec![],
+                canonical_bytes: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let bytes = export_manifest_bytes(
+        &tenant(),
+        &receipt_store,
+        &evidence_store,
+        &seal_store,
+        "rcpt-scope",
+    )
+    .await
+    .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+#[tokio::test]
+async fn a_verifier_conclusion_is_withheld_from_the_signed_feed() {
+    use piteka_storage::model::EvidenceSource;
+
+    let manifest = manifest_for(
+        vec![evidence_node("claim-1", EvidenceSource::Piteka, 100, Some(90))],
+        vec![
+            evidence_node(
+                "observed-1",
+                EvidenceSource::Provider("github".into()),
+                110,
+                Some(95),
+            ),
+            evidence_node("verdict-1", EvidenceSource::Verifier, 120, Some(99)),
+        ],
+    )
+    .await;
+
+    // The verdict is not in the payload Piteka signs.
+    let published: Vec<&str> = manifest["dispatch_evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(manifest["target_evidence"].as_array().unwrap())
+        .map(|node| node["node_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(published, vec!["claim-1", "observed-1"]);
+    assert!(
+        !manifest.to_string().contains("\"source\":\"verifier\""),
+        "no published node may be attributed to a verifier"
+    );
+
+    // Nor is it silently dropped: it is named, digested, and given a reason.
+    let withheld = manifest["withheld_verifier_conclusions"].as_array().unwrap();
+    assert_eq!(withheld.len(), 1);
+    assert_eq!(withheld[0]["node_id"], "verdict-1");
+    assert!(withheld[0]["content_digest"].as_str().is_some_and(|d| d.len() == 64));
+    assert!(withheld[0]["reason"].as_str().is_some_and(|r| !r.is_empty()));
+}
+
+#[tokio::test]
+async fn the_feed_no_longer_carries_a_published_verdict_count() {
+    use piteka_storage::model::EvidenceSource;
+
+    let manifest = manifest_for(
+        vec![evidence_node("claim-1", EvidenceSource::Piteka, 100, Some(90))],
+        vec![],
+    )
+    .await;
+    let attribution = &manifest["source_attribution"];
+
+    // `verifier_conclusions` published a verdict count as if the feed had the
+    // authority to report one. It is gone; what remains records withholding.
+    assert!(attribution.get("verifier_conclusions").is_none());
+    assert_eq!(attribution["withheld_verifier_conclusions"], 0);
+    assert_eq!(attribution["piteka_claims"], 1);
+}
+
+#[tokio::test]
+async fn attribution_counts_every_published_node_wherever_it_was_filed() {
+    use piteka_storage::model::EvidenceSource;
+
+    // A Piteka claim filed as target evidence used to be counted in neither
+    // bucket, which understated what the feed was signing.
+    let manifest = manifest_for(
+        vec![evidence_node(
+            "observed-1",
+            EvidenceSource::Provider("github".into()),
+            100,
+            None,
+        )],
+        vec![evidence_node("claim-1", EvidenceSource::Piteka, 105, None)],
+    )
+    .await;
+
+    assert_eq!(manifest["source_attribution"]["piteka_claims"], 1);
+    assert_eq!(manifest["source_attribution"]["provider_observations"], 1);
+}
+
+#[tokio::test]
+async fn source_asserted_time_observed_time_and_checkpoint_stay_distinct() {
+    use piteka_storage::model::EvidenceSource;
+
+    let manifest = manifest_for(
+        vec![evidence_node("claim-1", EvidenceSource::Piteka, 100, Some(90))],
+        vec![evidence_node(
+            "observed-1",
+            EvidenceSource::Provider("github".into()),
+            140,
+            Some(95),
+        )],
+    )
+    .await;
+
+    let claim = &manifest["dispatch_evidence"][0];
+    assert_eq!(claim["source"], "piteka");
+    assert_eq!(claim["asserted_event_at"], 90);
+    assert_eq!(claim["observed_at"], 100);
+
+    let observation = &manifest["target_evidence"][0];
+    assert_eq!(observation["source"], "github");
+    assert_eq!(observation["asserted_event_at"], 95);
+    assert_eq!(observation["observed_at"], 140);
+
+    // The checkpoint is Piteka's own collection horizon: the newest thing it
+    // collected, not the receipt's asserted creation time and not any
+    // source-asserted event time.
+    assert_eq!(manifest["export_checkpoint"]["evidence_collected_through"], 140);
+    assert_eq!(manifest["export_checkpoint"]["published_evidence_count"], 2);
+    assert_eq!(manifest["receipt"]["created_at"], 1);
+}
+
+#[tokio::test]
+async fn an_undisclosed_assertion_time_stays_null_rather_than_borrowing_the_clock() {
+    use piteka_storage::model::EvidenceSource;
+
+    let manifest = manifest_for(
+        vec![evidence_node("claim-1", EvidenceSource::Piteka, 100, None)],
+        vec![],
+    )
+    .await;
+
+    // Falling back to the collection time would turn Piteka's clock into the
+    // source's claim about when the event happened.
+    assert!(manifest["dispatch_evidence"][0]["asserted_event_at"].is_null());
+    assert_eq!(manifest["dispatch_evidence"][0]["observed_at"], 100);
+}
+
+#[tokio::test]
+async fn an_export_with_nothing_published_has_no_collection_checkpoint() {
+    let manifest = manifest_for(vec![], vec![]).await;
+
+    // A checkpoint over no evidence is not zero.
+    assert!(manifest["export_checkpoint"]["evidence_collected_through"].is_null());
+    assert_eq!(manifest["export_checkpoint"]["published_evidence_count"], 0);
+}
+
+#[tokio::test]
+async fn the_manifest_declares_the_version_a_consumer_must_read_it_under() {
+    let manifest = manifest_for(vec![], vec![]).await;
+    assert_eq!(
+        manifest["bundle_version"],
+        crate::bundle_export::EXPORT_MANIFEST_VERSION
+    );
+    assert_eq!(manifest["bundle_version"], "0.2");
+}
+
 #[tokio::test]
 async fn assemble_bundle_receipt_not_found() {
     let evidence_store = std::sync::Arc::new(InMemoryEvidenceNodeStore::default());

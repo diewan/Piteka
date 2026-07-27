@@ -216,8 +216,13 @@ where
 ///
 /// These bytes are the exact JSON payload that Piteka signs into its evidence
 /// feed and that Tuppira's `PitekaEvidenceFeedConnector` deserializes as an
-/// `ExportManifest` (`bundle_version` `"0.1"`). Keeping this side-effect free
-/// lets the feed producer publish observations from already-captured evidence.
+/// `ExportManifest` under the version they declare — see
+/// [`EXPORT_MANIFEST_VERSION`]. Keeping this side-effect free lets the feed
+/// producer publish observations from already-captured evidence.
+///
+/// What Piteka signs is bounded by what Piteka observed or produced: verifier
+/// conclusions are withheld from these bytes, because Piteka holds no protocol
+/// authority over verification and a signature over a verdict would assert one.
 pub async fn export_manifest_bytes<R, E, SC>(
     tenant: &TenantScope,
     receipt_store: &R,
@@ -332,7 +337,81 @@ fn single_use_anchor_value(anchor: Option<&SealConsumptionProofRecord>) -> serde
     }
 }
 
+/// The manifest version this module produces.
+///
+/// `0.2` separates the four times and attributions the feed had been merging,
+/// and withholds verifier conclusions instead of publishing them. It is a new
+/// version rather than an edit of `0.1` because a consumer must decide how to
+/// read these bytes from a declared version, never by inspecting which fields
+/// happen to be present.
+pub const EXPORT_MANIFEST_VERSION: &str = "0.2";
+
+/// Stable name for the source that produced an evidence node.
+fn source_name(source: &EvidenceSource) -> &str {
+    match source {
+        EvidenceSource::Piteka => "piteka",
+        EvidenceSource::Provider(provider) => provider,
+        EvidenceSource::Verifier => "verifier",
+    }
+}
+
+/// Renders one published evidence node for the feed.
+///
+/// Four facts stay four fields. `source` is who produced it, `asserted_event_at`
+/// is when that source says the event happened, and `observed_at` is when Piteka
+/// collected it — the two times are never substituted for one another, and an
+/// undisclosed assertion time stays `null` rather than falling back to the
+/// collection time, which would turn Piteka's clock into the source's claim.
+fn published_evidence_value(node: &EvidenceNodeRecord) -> serde_json::Value {
+    serde_json::json!({
+        "node_id": node.node_id_hex,
+        "registry_id": node.registry_id,
+        "source": source_name(&node.source),
+        "asserted_event_at": node.asserted_event_at_unix_seconds,
+        "observed_at": node.collected_at_unix_seconds,
+        "content_digest": node.content_digest.to_hex(),
+    })
+}
+
+/// Records a verifier-sourced node as withheld, without publishing its content.
+///
+/// Piteka holds no protocol authority over whether evidence verifies, so the
+/// feed must not carry a verifier's conclusion. Dropping such a node silently
+/// would be the other failure: the export would look complete while a reader had
+/// no way to know something was held back. The node is therefore named and
+/// digested — enough to ask for it through a channel that can carry authority —
+/// and its content stays out of the signed payload.
+fn withheld_conclusion_value(node: &EvidenceNodeRecord) -> serde_json::Value {
+    serde_json::json!({
+        "node_id": node.node_id_hex,
+        "content_digest": node.content_digest.to_hex(),
+        "reason": "verifier conclusions are not published by the evidence feed; \
+                   Piteka holds no protocol authority over verification",
+    })
+}
+
+/// The point in Piteka's own collection history this export covers.
+///
+/// Distinct from every other time in the manifest: it is not the receipt's
+/// asserted `created_at`, and it is not the feed envelope's `emitted_at`
+/// ordering key. It answers only "how current is the evidence in this export",
+/// and it is `null` when nothing was published, because a checkpoint over no
+/// evidence is not zero.
+fn export_checkpoint_value(published: &[&EvidenceNodeRecord]) -> serde_json::Value {
+    serde_json::json!({
+        "evidence_collected_through": published
+            .iter()
+            .map(|node| node.collected_at_unix_seconds)
+            .max(),
+        "published_evidence_count": published.len(),
+    })
+}
+
 /// Assembles a bundle manifest JSON value.
+///
+/// Verifier-sourced nodes are partitioned out of the published evidence before
+/// anything is rendered, so the signed payload contains only what Piteka
+/// observed from a provider or produced itself.
 fn assemble_manifest(
     receipt: &ReceiptProjection,
     dispatch_nodes: &[EvidenceNodeRecord],
@@ -342,9 +421,27 @@ fn assemble_manifest(
 ) -> Result<serde_json::Value, BundleExportError> {
     let outcome_str = outcome_as_str(&receipt.outcome);
 
+    let is_conclusion = |node: &&EvidenceNodeRecord| matches!(node.source, EvidenceSource::Verifier);
+    let (dispatch_conclusions, dispatch_published): (Vec<_>, Vec<_>) =
+        dispatch_nodes.iter().partition(is_conclusion);
+    let (target_conclusions, target_published): (Vec<_>, Vec<_>) =
+        target_nodes.iter().partition(is_conclusion);
+    // Gaps record that evidence is absent. They assert nothing about validity,
+    // so there is no conclusion in them to withhold, and filtering them would
+    // break the gap accounting a consumer checks the export against.
+    let withheld: Vec<&EvidenceNodeRecord> = dispatch_conclusions
+        .into_iter()
+        .chain(target_conclusions)
+        .collect();
+    let published: Vec<&EvidenceNodeRecord> = dispatch_published
+        .iter()
+        .chain(target_published.iter())
+        .copied()
+        .collect();
+
     Ok(serde_json::json!({
         "single_use_anchor": single_use_anchor_value(single_use_anchor),
-        "bundle_version": "0.1",
+        "bundle_version": EXPORT_MANIFEST_VERSION,
         "receipt": {
             "receipt_id": receipt.receipt_id_hex,
             "mandate_id": receipt.mandate_id_hex,
@@ -353,41 +450,39 @@ fn assemble_manifest(
             "outcome": outcome_str,
             "created_at": receipt.created_at_unix_seconds,
         },
-        "dispatch_evidence": dispatch_nodes.iter().map(|n| {
+        "dispatch_evidence": dispatch_published
+            .iter()
+            .map(|node| published_evidence_value(node))
+            .collect::<Vec<_>>(),
+        "target_evidence": target_published
+            .iter()
+            .map(|node| published_evidence_value(node))
+            .collect::<Vec<_>>(),
+        "evidence_gaps": gap_nodes.iter().map(|node| {
             serde_json::json!({
-                "node_id": n.node_id_hex,
-                "registry_id": n.registry_id,
-                "source": match &n.source {
-                    EvidenceSource::Piteka => "piteka",
-                    EvidenceSource::Provider(p) => p,
-                    EvidenceSource::Verifier => "verifier",
-                },
-                "content_digest": n.content_digest.to_hex(),
+                "node_id": node.node_id_hex,
+                "content_digest": node.content_digest.to_hex(),
             })
         }).collect::<Vec<_>>(),
-        "target_evidence": target_nodes.iter().map(|n| {
-            serde_json::json!({
-                "node_id": n.node_id_hex,
-                "registry_id": n.registry_id,
-                "source": match &n.source {
-                    EvidenceSource::Piteka => "piteka",
-                    EvidenceSource::Provider(p) => p,
-                    EvidenceSource::Verifier => "verifier",
-                },
-                "content_digest": n.content_digest.to_hex(),
-            })
-        }).collect::<Vec<_>>(),
-        "evidence_gaps": gap_nodes.iter().map(|n| {
-            serde_json::json!({
-                "node_id": n.node_id_hex,
-                "content_digest": n.content_digest.to_hex(),
-            })
-        }).collect::<Vec<_>>(),
+        "withheld_verifier_conclusions": withheld
+            .iter()
+            .map(|node| withheld_conclusion_value(node))
+            .collect::<Vec<_>>(),
+        // Counted over everything published, not over one collection each: a
+        // Piteka claim filed as target evidence was previously counted nowhere,
+        // which made the attribution understate what the feed was signing.
         "source_attribution": {
-            "piteka_claims": dispatch_nodes.iter().filter(|n| matches!(n.source, EvidenceSource::Piteka)).count(),
-            "provider_observations": target_nodes.iter().filter(|n| matches!(n.source, EvidenceSource::Provider(_))).count(),
-            "verifier_conclusions": 0,
+            "piteka_claims": published
+                .iter()
+                .filter(|node| matches!(node.source, EvidenceSource::Piteka))
+                .count(),
+            "provider_observations": published
+                .iter()
+                .filter(|node| matches!(node.source, EvidenceSource::Provider(_)))
+                .count(),
+            "withheld_verifier_conclusions": withheld.len(),
         },
+        "export_checkpoint": export_checkpoint_value(&published),
         "missing_evidence": {
             "gap_count": gap_nodes.len(),
             "gaps": receipt.evidence_gaps,
