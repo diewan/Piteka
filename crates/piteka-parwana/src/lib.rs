@@ -169,11 +169,10 @@ pub const PINNED_CONTRACT_PROTOCOL_VERSION: &str = "1.0.0";
 /// Wire version this adapter produces and accepts.
 ///
 /// Authority: `wire_version` on the active row of
-/// `development/pin-matrix.toml`. Piteka produces V1 artifacts and claims no
-/// portable non-equivocation while this reads `v1`; moving it is a coordinated
-/// release action governed by that file's `[update_order]`, never a side effect
-/// of another ticket.
-pub const PINNED_WIRE_VERSION: &str = "v1";
+/// `development/pin-matrix.toml`. `v2` authorizes production of the canonical
+/// V2 bundles implemented by PIT-NE-005. V1 accountability objects remain
+/// inspectable but never acquire portable-closure assurance.
+pub const PINNED_WIRE_VERSION: &str = "v2";
 
 /// Accountability protocol version (major, minor) this adapter is built against.
 ///
