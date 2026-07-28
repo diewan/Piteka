@@ -63,6 +63,56 @@ pub mod protocol {
     };
 }
 
+/// Parwana's V2 portable-closure vocabulary, re-exported through the SDK.
+///
+/// The four capabilities Piteka consumes, in the protocol's own types: the
+/// consumed state reference, the closure proof and the trust mode a verifier
+/// concluded under, the V2 consignment descriptor, and the typed verification
+/// report. These are the canonical Parwana types themselves — not copies — so
+/// Piteka cannot end up holding a product-local `ConsumedStateRef` whose meaning
+/// drifts from the protocol's (`development/ARCHITECTURE.md` §5.1).
+///
+/// # What passing through here does not grant
+///
+/// Nothing in this module verifies anything. [`inspect`] decodes and structurally
+/// validates a consignment; a successful result establishes neither signature
+/// validity nor source closure, and presenting it as either would be the
+/// structural-only-verification prohibition the charter names in §8.
+/// [`decode_verification_report`] likewise decodes a report a *verifier*
+/// produced — Piteka relays that conclusion and never computes one, and the
+/// report's fields stay private in `csv-verifier` so no consumer can construct
+/// or edit one into a stronger reading.
+///
+/// The aggregate is deliberately absent. A [`VerificationReport`] carries its
+/// dimensions and its foundational shortfalls separately, with no rolled-up
+/// verdict, because a single status is the shape that lets an indeterminate
+/// dimension read as a pass.
+pub mod closure {
+    pub use csv_sdk::v2::{
+        // The consumed state reference: which single-use output a transition
+        // claims to be the successor of.
+        ConsumedStateRef,
+        // Closure proof and assessment: what was proven about that output's
+        // closure, and the trust anchor the conclusion stands on.
+        ClosureProof,
+        ClosureProofKind,
+        ClosureTrustMode,
+        FinalizedCheckpoint,
+        // The V2 consignment descriptor and its structural decode.
+        ConsignmentProofRequirements,
+        ConsignmentV2,
+        ConsignmentV2Error,
+        ConsignmentV2ErrorCode,
+        ConsignmentV2Payload,
+        inspect,
+        // The typed verification report, exactly as a verifier emitted it.
+        VerificationDimension,
+        VerificationReport,
+        VerificationReportDecodeError,
+        decode_verification_report,
+    };
+}
+
 pub mod anchor;
 pub mod migration;
 
@@ -78,7 +128,7 @@ use protocol::{
 // collapsed into one. Two of them are observable from the linked SDK at run
 // time and are checked by `verify_contract_versions`; three are declarations
 // whose authority is a file, and they are checked against those files by
-// `the_five_pinned_version_lines_agree_with_their_authorities` in `tests.rs`.
+// `the_pinned_version_lines_agree_with_their_authorities` in `tests.rs`.
 //
 // The distinction matters because these lines genuinely move independently:
 // the contract package advanced 0.1.5 -> 0.1.10 while the `csv-sdk` crate

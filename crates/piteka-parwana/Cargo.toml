@@ -15,7 +15,13 @@ rust-version.workspace = true
 # Opaque application-input commitment for the DB-migration adapter (PROFILE-02).
 # Not a protocol-object hash — those stay behind the csv-sdk facade.
 sha2 = "0.10"
-csv-sdk = { version = "=0.1.5", path = "../../../parwana/csv-sdk", default-features = false, features = ["std", "accountability"] }
+# `client` carries the V2 portable-closure facade (`csv_sdk::v2`): the consumed
+# state reference, closure proof and trust mode, the V2 consignment descriptor,
+# and the typed verification report (PIT-NE-002). It is selected without `tokio`
+# and without `native`, so no async runtime and no filesystem-backed store come
+# with it, and no chain-adapter feature is enabled — the C toolchain those need
+# stays out of Piteka's build.
+csv-sdk = { version = "=0.1.5", path = "../../../parwana/csv-sdk", default-features = false, features = ["std", "accountability", "client"] }
 piteka-ports.workspace = true
 
 [lints.rust]

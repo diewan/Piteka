@@ -347,3 +347,137 @@ fn from_wire_rejects_a_truncated_object_id() {
         Err(AdapterError::CorruptCanonicalObject)
     ));
 }
+
+// ── The V2 closure vocabulary reaches Piteka unchanged (PIT-NE-002) ─────────
+
+/// All four V2 capabilities are reachable through the adapter, in Parwana's own
+/// types.
+///
+/// The assertions are compile-time: naming each type through `crate::closure`
+/// is what proves the re-export exists, and binding it to the SDK path is what
+/// proves it is the *same* type rather than a Piteka-local one that happens to
+/// share a name.
+#[test]
+fn the_v2_closure_vocabulary_is_reachable_through_the_adapter() {
+    fn same_type<T>(_: std::marker::PhantomData<T>, _: std::marker::PhantomData<T>) {}
+
+    // 1. The consumed state reference.
+    same_type(
+        std::marker::PhantomData::<crate::closure::ConsumedStateRef>,
+        std::marker::PhantomData::<csv_sdk::v2::ConsumedStateRef>,
+    );
+    // 2. Closure proof and the trust anchor a conclusion stands on.
+    same_type(
+        std::marker::PhantomData::<crate::closure::ClosureProof>,
+        std::marker::PhantomData::<csv_sdk::v2::ClosureProof>,
+    );
+    same_type(
+        std::marker::PhantomData::<crate::closure::ClosureTrustMode>,
+        std::marker::PhantomData::<csv_sdk::v2::ClosureTrustMode>,
+    );
+    // 3. The V2 consignment descriptor.
+    same_type(
+        std::marker::PhantomData::<crate::closure::ConsignmentV2>,
+        std::marker::PhantomData::<csv_sdk::v2::ConsignmentV2>,
+    );
+    // 4. The typed verification report.
+    same_type(
+        std::marker::PhantomData::<crate::closure::VerificationReport>,
+        std::marker::PhantomData::<csv_sdk::v2::VerificationReport>,
+    );
+    same_type(
+        std::marker::PhantomData::<crate::closure::VerificationDimension>,
+        std::marker::PhantomData::<csv_sdk::v2::VerificationDimension>,
+    );
+}
+
+/// Inspection is structural. It must not be reachable as a verification result.
+///
+/// ARCHITECTURE.md §8 forbids structural-only verification presented as
+/// cryptographic success, and `inspect` is exactly the call a consumer could
+/// mistake for one. Malformed bytes are rejected rather than coerced, and the
+/// success type carries no boolean a caller could read as "verified".
+#[test]
+fn structural_inspection_rejects_malformed_bytes_and_asserts_nothing() {
+    assert!(crate::closure::inspect(b"not a canonical consignment").is_err());
+    assert!(crate::closure::inspect(&[]).is_err());
+}
+
+/// A verification report is decoded, never constructed.
+///
+/// Its fields stay private in `csv-verifier`, so no Piteka code can assemble a
+/// report or edit one into a stronger reading. Undecodable bytes fail closed
+/// instead of yielding an empty report, which would read as a verifier that
+/// found no problems.
+#[test]
+fn a_verification_report_is_decoded_and_never_assembled_locally() {
+    let Err(error) = crate::closure::decode_verification_report(b"not a canonical report") else {
+        panic!("undecodable report bytes must not yield a report");
+    };
+    assert!(!error.detail.is_empty(), "a rejection must say why");
+}
+
+/// No Piteka crate outside the adapter defines its own version of these types.
+///
+/// ARCHITECTURE.md §5.1: Piteka must not copy Parwana domain structs into
+/// product-local equivalents. A copy would not fail to compile — it would
+/// compile and quietly mean something slightly different from the protocol, so
+/// the boundary is asserted over the source tree.
+#[test]
+fn no_piteka_crate_defines_a_product_local_closure_type() {
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("piteka-parwana lives under <repo>/crates");
+
+    let mut offenders = Vec::new();
+    let mut scanned = 0_usize;
+    let mut stack = vec![crates.to_path_buf()];
+    while let Some(directory) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|name| name == "target") {
+                    continue;
+                }
+                stack.push(path);
+                continue;
+            }
+            if path.extension().is_none_or(|extension| extension != "rs") {
+                continue;
+            }
+            // The adapter is where these names are supposed to appear.
+            if path.starts_with(crates.join("piteka-parwana")) {
+                continue;
+            }
+            let Ok(source) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            scanned += 1;
+            for name in [
+                "ConsumedStateRef",
+                "ClosureProof",
+                "ConsignmentV2",
+                "VerificationReport",
+                "ClosureTrustMode",
+            ] {
+                for keyword in ["struct", "enum", "type"] {
+                    if source.contains(&format!("{keyword} {name}")) {
+                        offenders.push(format!("{} defines {keyword} {name}", path.display()));
+                    }
+                }
+            }
+        }
+    }
+    // A walk that silently reached nothing would pass without checking anything.
+    assert!(
+        scanned > 20,
+        "the boundary scan reached only {scanned} source files"
+    );
+    assert!(
+        offenders.is_empty(),
+        "protocol types must come from piteka-parwana::closure, not be redefined: {offenders:?}"
+    );
+}
