@@ -72,18 +72,66 @@ use protocol::{
     AccountabilityObjectKind, ActionIntent, ActionIntentWireV1, CanonicalAccountabilityObjectWire,
 };
 
+// ── The five pinned version lines ───────────────────────────────────────────
+//
+// Piteka pins five independent version lines, and they are deliberately not
+// collapsed into one. Two of them are observable from the linked SDK at run
+// time and are checked by `verify_contract_versions`; three are declarations
+// whose authority is a file, and they are checked against those files by
+// `the_five_pinned_version_lines_agree_with_their_authorities` in `tests.rs`.
+//
+// The distinction matters because these lines genuinely move independently:
+// the contract package advanced 0.1.5 -> 0.1.10 while the `csv-sdk` crate
+// stayed at 0.1.5 throughout. Reconciling them to a single number would pin a
+// combination that never existed (see the closed KU-01/KU-02 entries in
+// `development/pin-matrix.toml`).
+
 /// Exact Parwana contract package version this adapter is pinned to.
 ///
-/// Mirrors `contract_version` in `development/contract-pins/piteka.toml` and the
-/// `=0.1.5` requirement on `csv-sdk`. Kept as a human-facing constant so the pin
-/// is auditable from a running Piteka; the binding compatibility check lives in
-/// [`verify_contract_versions`].
-pub const PINNED_CONTRACT_VERSION: &str = "0.1.9";
+/// Authority: `contract_version` in `development/contract-pins/piteka.toml`.
+/// This is the *contract package* line, not the `csv-sdk` crate version — see
+/// [`PINNED_SDK_PACKAGE_REQUIREMENT`], which is a separate line and a separate
+/// number. Kept as a human-facing constant so the pin is auditable from a
+/// running Piteka.
+pub const PINNED_CONTRACT_VERSION: &str = "0.1.10";
+
+/// Exact Cargo requirement this adapter places on the `csv-sdk` crate.
+///
+/// Authority: the `csv-sdk` dependency in this crate's `Cargo.toml`, which is
+/// what Cargo actually enforces at build time. The constant exists so the
+/// requirement is auditable from the code and so a silent edit to one without
+/// the other fails a test. `latest` is prohibited in CI and deployments, so
+/// this is always an `=` requirement.
+pub const PINNED_SDK_PACKAGE_REQUIREMENT: &str = "=0.1.5";
+
+/// Contract-package protocol version line this adapter is pinned to.
+///
+/// Authority: `protocol_version` in `development/contract-pins/piteka.toml`.
+/// Distinct from [`EXPECTED_PROTOCOL_VERSION`], which is the accountability
+/// *object* protocol version reported by the linked SDK. The two describe
+/// different things and are `1.0.0` and `(0, 1)` respectively; collapsing them
+/// would be the same category error the contract/crate pair invites.
+pub const PINNED_CONTRACT_PROTOCOL_VERSION: &str = "1.0.0";
+
+/// Wire version this adapter produces and accepts.
+///
+/// Authority: `wire_version` on the active row of
+/// `development/pin-matrix.toml`. Piteka produces V1 artifacts and claims no
+/// portable non-equivocation while this reads `v1`; moving it is a coordinated
+/// release action governed by that file's `[update_order]`, never a side effect
+/// of another ticket.
+pub const PINNED_WIRE_VERSION: &str = "v1";
 
 /// Accountability protocol version (major, minor) this adapter is built against.
+///
+/// Observable from the linked SDK at run time, and checked by
+/// [`verify_contract_versions`].
 pub const EXPECTED_PROTOCOL_VERSION: (u16, u16) = (0, 1);
 
 /// Accountability object schema version this adapter is built against.
+///
+/// Observable from the linked SDK at run time, and checked by
+/// [`verify_contract_versions`].
 pub const EXPECTED_OBJECT_VERSION: u16 = 1;
 
 /// Concrete accountability contract versions observed from the linked SDK.
@@ -163,8 +211,9 @@ impl fmt::Display for AdapterError {
         match self {
             Self::ContractMismatch { expected, found } => write!(
                 f,
-                "pinned Parwana contract {PINNED_CONTRACT_VERSION} expects {expected}, \
-                 but the linked SDK reports {found}"
+                "pinned Parwana contract mismatch: {} expects {expected}, \
+                 but the linked SDK reports {found}",
+                pinned_contract_summary()
             ),
             Self::InvalidIntent(reason) => write!(f, "invalid action intent: {reason}"),
             Self::InvalidReceipt(reason) => write!(f, "invalid execution receipt: {reason}"),
@@ -177,11 +226,29 @@ impl fmt::Display for AdapterError {
 
 impl std::error::Error for AdapterError {}
 
+/// All five pinned version lines, for logs and operator-facing diagnostics.
+///
+/// Rendered together on purpose: a mismatch report naming one line invites the
+/// reader to reconcile it against another that was never the same number.
+#[must_use]
+pub fn pinned_contract_summary() -> String {
+    format!(
+        "contract package {PINNED_CONTRACT_VERSION} (protocol line \
+         {PINNED_CONTRACT_PROTOCOL_VERSION}, wire {PINNED_WIRE_VERSION}), \
+         csv-sdk {PINNED_SDK_PACKAGE_REQUIREMENT}"
+    )
+}
+
 /// Verifies that observed contract versions match the pinned expectation.
 ///
 /// Returns [`AdapterError::ContractMismatch`] on any deviation. This is the
 /// fail-closed gate that [`ParwanaContract::bind`] runs; it is exposed so the
 /// rejection path is directly testable without a mismatched dependency graph.
+///
+/// The comparison is over the whole [`ContractVersions`] value, so a partial
+/// match — the right protocol version against the wrong object version, say —
+/// fails exactly as a total mismatch does. There is no path on which Piteka
+/// continues against a partially matching contract.
 ///
 /// # Errors
 ///
@@ -289,6 +356,33 @@ impl ParwanaContract {
         let versions = ContractVersions::from_linked_sdk();
         verify_contract_versions(versions)?;
         Ok(Self { versions })
+    }
+
+    /// The startup gate: binds the pinned contract or refuses to start.
+    ///
+    /// Every Piteka binary calls this before it serves anything. A process that
+    /// reached its listener without binding would be one that answers requests
+    /// against a contract nobody checked, and the failure would surface later as
+    /// a malformed object rather than at the point the mismatch exists.
+    ///
+    /// On success it returns the bound contract and writes the pin it verified
+    /// to stderr, so an operator can audit what a running Piteka is pinned to
+    /// without reading the binary's source.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError::ContractMismatch`] when the linked SDK does not
+    /// match the pinned accountability contract. Callers must propagate it —
+    /// there is no degraded mode to fall back to, because the alternative to a
+    /// verified contract is an unverified one.
+    pub fn bind_or_refuse_to_start() -> Result<Self, AdapterError> {
+        let contract = Self::bind()?;
+        eprintln!(
+            "Piteka pinned to Parwana {} — accountability {}",
+            pinned_contract_summary(),
+            contract.versions()
+        );
+        Ok(contract)
     }
 
     /// The exact pinned contract package version.

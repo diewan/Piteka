@@ -30,12 +30,27 @@ fn workspace_dependencies_point_inward() {
 /// exact pinned version. No other crate touches a `csv-*` protocol crate.
 /// Enforces ARCHITECTURE.md §5.1 (no product-local protocol copies) and §7
 /// (exact pin, no `latest`).
+/// Strip `#` comments so the boundary check reads declarations, not prose.
+///
+/// Without this the assertion below trips on any manifest comment that names a
+/// `csv-*` crate — including a comment explaining why a crate does *not* depend
+/// on one. A boundary test that a comment can fail is enforcing text rather
+/// than dependencies (PIT-NE-001).
+fn declarations_only(manifest: &str) -> String {
+    manifest
+        .lines()
+        .map(|line| line.split('#').next().unwrap_or("").trim_end())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
 fn only_the_adapter_links_the_parwana_contract() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let crates = root.join("crates");
 
-    let adapter = fs::read_to_string(crates.join("piteka-parwana/Cargo.toml")).unwrap();
+    let adapter =
+        declarations_only(&fs::read_to_string(crates.join("piteka-parwana/Cargo.toml")).unwrap());
     assert!(
         adapter.contains(r#"csv-sdk = { version = "=0.1.5""#),
         "adapter must pin csv-sdk to an exact contract version"
@@ -47,7 +62,8 @@ fn only_the_adapter_links_the_parwana_contract() {
 
     // Every other workspace crate, plus the root binary and apps, must stay
     // free of any direct `csv-*` protocol dependency.
-    let mut manifests = vec![fs::read_to_string(root.join("Cargo.toml")).unwrap()];
+    let mut manifests =
+        vec![declarations_only(&fs::read_to_string(root.join("Cargo.toml")).unwrap())];
     for entry in fs::read_dir(&crates).unwrap() {
         let dir = entry.unwrap().path();
         if dir.file_name().and_then(|name| name.to_str()) == Some("piteka-parwana") {
@@ -55,7 +71,7 @@ fn only_the_adapter_links_the_parwana_contract() {
         }
         let manifest = dir.join("Cargo.toml");
         if manifest.exists() {
-            manifests.push(fs::read_to_string(manifest).unwrap());
+            manifests.push(declarations_only(&fs::read_to_string(manifest).unwrap()));
         }
     }
     // Also check apps/
@@ -65,7 +81,7 @@ fn only_the_adapter_links_the_parwana_contract() {
             let dir = entry.unwrap().path();
             let manifest = dir.join("Cargo.toml");
             if manifest.exists() {
-                manifests.push(fs::read_to_string(manifest).unwrap());
+                manifests.push(declarations_only(&fs::read_to_string(manifest).unwrap()));
             }
         }
     }

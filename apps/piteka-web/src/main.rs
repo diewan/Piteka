@@ -14,6 +14,11 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Fail closed before anything is served (PIT-NE-001). A process that
+    // reached its listener without binding the pinned contract would answer
+    // requests against a contract nobody checked.
+    piteka_parwana::ParwanaContract::bind_or_refuse_to_start()?;
+
     let assets_router = piteka_web::assets_router();
 
     // With DATABASE_URL set, the whole write path is live: the action-request

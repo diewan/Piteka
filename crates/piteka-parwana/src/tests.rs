@@ -1,8 +1,9 @@
 //! Positive and adversarial coverage for the Parwana adapter boundary.
 
 use super::{
-    AdapterError, ContractVersions, PINNED_CONTRACT_VERSION, ParwanaContract,
-    verify_contract_versions,
+    AdapterError, ContractVersions, EXPECTED_OBJECT_VERSION, EXPECTED_PROTOCOL_VERSION,
+    PINNED_CONTRACT_PROTOCOL_VERSION, PINNED_CONTRACT_VERSION, PINNED_SDK_PACKAGE_REQUIREMENT,
+    PINNED_WIRE_VERSION, ParwanaContract, pinned_contract_summary, verify_contract_versions,
 };
 use crate::protocol::{
     AccountabilityObjectKind, ActionIntent, ActionIntentWireV1, GitHubDeploymentIntentV1,
@@ -44,9 +45,139 @@ fn valid_intent() -> ActionIntent {
 #[test]
 fn bind_reports_the_pinned_contract() {
     let contract = ParwanaContract::bind().expect("linked SDK matches the pinned contract");
-    assert_eq!(contract.contract_version(), "0.1.9");
     assert_eq!(contract.contract_version(), PINNED_CONTRACT_VERSION);
     assert_eq!(contract.versions(), ContractVersions::expected());
+}
+
+// ── The five pinned version lines (PIT-NE-001) ──────────────────────────────
+
+/// Reads one `key = "value"` pair out of a flat TOML preamble.
+///
+/// Deliberately naive rather than a TOML dependency: this crate is the narrow
+/// protocol seam and gains no runtime dependency for a test. It only reads keys
+/// that live above the first table header, which is where all of them are.
+fn declared(source: &str, key: &str) -> String {
+    let preamble = source.split("\n[").next().unwrap_or(source);
+    for line in preamble.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix(key)
+            && let Some(value) = rest.trim_start().strip_prefix('=')
+        {
+            return value.trim().trim_matches('"').to_string();
+        }
+    }
+    panic!("`{key}` is not declared in:\n{source}");
+}
+
+/// Every declared pin must equal the file that is its authority.
+///
+/// This is the test that would have caught the drift this ticket fixes:
+/// `PINNED_CONTRACT_VERSION` read `0.1.9` while the pin file said `0.1.10`, and
+/// nothing compared them. The five lines are checked against their own
+/// authorities and never against each other — they are independent version
+/// lines and reconciling them to one number would pin a combination that never
+/// existed.
+#[test]
+fn the_pinned_version_lines_agree_with_their_authorities() {
+    let crate_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = crate_root
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("piteka-parwana lives at <repo>/crates/piteka-parwana");
+
+    let manifest = std::fs::read_to_string(crate_root.join("Cargo.toml"))
+        .expect("the adapter manifest is readable");
+    let pin = std::fs::read_to_string(repo_root.join(".diewan/parwana-contract.toml"))
+        .expect("the repository-local contract pin is readable");
+
+    // Contract package line.
+    assert_eq!(PINNED_CONTRACT_VERSION, declared(&pin, "contract_version"));
+    // Contract-package protocol line — not the accountability object protocol
+    // version, which is checked against the linked SDK instead.
+    assert_eq!(
+        PINNED_CONTRACT_PROTOCOL_VERSION,
+        declared(&pin, "protocol_version")
+    );
+    // Wire line.
+    assert_eq!(PINNED_WIRE_VERSION, declared(&pin, "wire_version"));
+    // Package line, declared in two places that must not drift: the pin file
+    // and the Cargo requirement that actually binds the build.
+    assert_eq!(
+        PINNED_SDK_PACKAGE_REQUIREMENT,
+        declared(&pin, "sdk_package_requirement")
+    );
+    assert!(
+        manifest.contains(&format!(r#"csv-sdk = {{ version = "{PINNED_SDK_PACKAGE_REQUIREMENT}""#)),
+        "the Cargo requirement on csv-sdk must be exactly {PINNED_SDK_PACKAGE_REQUIREMENT}"
+    );
+    // `latest` is prohibited in CI and deployments, so the requirement is
+    // always exact.
+    assert!(PINNED_SDK_PACKAGE_REQUIREMENT.starts_with('='));
+    assert!(!manifest.contains(r#"csv-sdk = { version = "latest"#));
+
+    // The two lines the linked SDK can be asked about directly.
+    assert_eq!(
+        ContractVersions::from_linked_sdk(),
+        ContractVersions::expected()
+    );
+    assert_eq!(
+        (
+            EXPECTED_PROTOCOL_VERSION.0,
+            EXPECTED_PROTOCOL_VERSION.1,
+            EXPECTED_OBJECT_VERSION
+        ),
+        (0, 1, 1)
+    );
+
+    // The operator-facing summary names every line, so a mismatch report never
+    // invites reconciling one against another.
+    let summary = pinned_contract_summary();
+    for line in [
+        PINNED_CONTRACT_VERSION,
+        PINNED_CONTRACT_PROTOCOL_VERSION,
+        PINNED_WIRE_VERSION,
+        PINNED_SDK_PACKAGE_REQUIREMENT,
+    ] {
+        assert!(summary.contains(line), "summary omits {line}: {summary}");
+    }
+}
+
+/// The contract package line and the crate line are different numbers, and the
+/// adapter must not quietly assume they are the same.
+#[test]
+fn the_contract_package_line_is_not_the_crate_version_line() {
+    assert_ne!(
+        PINNED_CONTRACT_VERSION,
+        PINNED_SDK_PACKAGE_REQUIREMENT.trim_start_matches('=')
+    );
+}
+
+/// Startup must refuse to continue on a mismatch, and a *partial* match is a
+/// mismatch: the right protocol version against the wrong object version fails
+/// exactly as a total disagreement does.
+#[test]
+fn a_partial_version_match_fails_closed_like_a_total_one() {
+    let expected = ContractVersions::expected();
+
+    let wrong_object = ContractVersions {
+        object_version: expected.object_version + 1,
+        ..expected
+    };
+    let wrong_protocol = ContractVersions {
+        protocol_minor: expected.protocol_minor + 1,
+        ..expected
+    };
+
+    for found in [wrong_object, wrong_protocol] {
+        assert_eq!(
+            verify_contract_versions(found),
+            Err(AdapterError::ContractMismatch { expected, found }),
+            "a partial match must not be accepted"
+        );
+    }
+
+    // The linked SDK does match, so the startup gate binds rather than refusing.
+    assert!(ParwanaContract::bind_or_refuse_to_start().is_ok());
 }
 
 #[test]

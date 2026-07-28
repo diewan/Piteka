@@ -2078,6 +2078,7 @@ dependencies = [
  "piteka-api",
  "piteka-application",
  "piteka-domain",
+ "piteka-parwana",
  "piteka-storage",
  "piteka-ui",
  "serde",

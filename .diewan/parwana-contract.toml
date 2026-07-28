@@ -3,6 +3,15 @@ consumer = "piteka"
 publisher = "github.com/diewan/parwana"
 contract_version = "0.1.10"
 protocol_version = "1.0.0"
+# The wire version Piteka produces and accepts. Mirrors `wire_version` on the
+# active row of development/pin-matrix.toml, recorded here so the line is
+# auditable from inside this repository (PIT-NE-001). Moving it is a
+# coordinated release action governed by that file's [update_order].
+wire_version = "v1"
+# The exact Cargo requirement crates/piteka-parwana places on `csv-sdk`. A
+# separate line from contract_version: the contract package advanced
+# 0.1.5 -> 0.1.10 while the crate stayed at 0.1.5.
+sdk_package_requirement = "=0.1.5"
 expires_on = "2027-01-16"
 corpus_digest = "39869b9206ab0a78ce60673f30c1e726c2c2ec8260e79c7e9495aea3e35ee896"
 

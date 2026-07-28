@@ -6,6 +6,11 @@ use piteka_infra::SystemClock;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Fail closed before anything is served (PIT-NE-001). A process that
+    // reached its listener without binding the pinned contract would answer
+    // requests against a contract nobody checked.
+    piteka_parwana::ParwanaContract::bind_or_refuse_to_start()?;
+
     // Build the API with in-memory test ports (demo only).
     let test_ports = piteka_api::TestPorts::new();
     let api_router = piteka_api::routes::build_full_router_with_webhook(test_ports);

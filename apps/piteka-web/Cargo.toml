@@ -13,6 +13,9 @@ piteka-application.workspace = true
 piteka-domain.workspace = true
 piteka-storage.workspace = true
 piteka-api = { path = "../../apps/piteka-api" }
+# The startup contract gate (PIT-NE-001). This is the adapter, not a `csv-*`
+# protocol crate, so the single-dependency-edge rule is preserved.
+piteka-parwana.workspace = true
 piteka-ui.workspace = true
 serde = { version = "1", features = ["derive"] }
 tokio.workspace = true
