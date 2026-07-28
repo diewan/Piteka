@@ -17,10 +17,22 @@ rust-version.workspace = true
 sha2 = "0.10"
 # `client` carries the V2 portable-closure facade (`csv_sdk::v2`): the consumed
 # state reference, closure proof and trust mode, the V2 consignment descriptor,
-# and the typed verification report (PIT-NE-002). It is selected without `tokio`
-# and without `native`, so no async runtime and no filesystem-backed store come
-# with it, and no chain-adapter feature is enabled — the C toolchain those need
-# stays out of Piteka's build.
+# and the typed verification report (PIT-NE-002). `csv_sdk::v2` is gated on this
+# feature and there is no narrower one, so reaching those four types is what
+# selects it.
+#
+# It is a coarse feature and it is NOT free. Selecting it added 34 packages to
+# the workspace lockfile: `csv-runtime`, `csv-storage`, `csv-coordinator`,
+# `csv-remote`, and `csv-observability`, and behind them `redb` (an embedded
+# on-disk store), an HTTP client (`reqwest`/`hyper`/`h2`), and a TLS stack
+# terminating in `openssl-sys` — a C library, so a build environment now needs
+# its headers. The SDK's own `tokio` and `native` features are not selected and
+# no chain-adapter feature is enabled, but neither of those facts keeps an async
+# runtime, an on-disk store, or a C toolchain out; they arrive through `client`
+# regardless. Say what the build actually pulls, not what was not ticked.
+#
+# Nothing in Piteka calls into any of them, and no adapter or runtime is
+# constructed. What grew is the surface an auditor has to consider.
 csv-sdk = { version = "=0.1.5", path = "../../../parwana/csv-sdk", default-features = false, features = ["std", "accountability", "client"] }
 piteka-ports.workspace = true
 

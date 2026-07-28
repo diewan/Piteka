@@ -417,21 +417,32 @@ fn a_verification_report_is_decoded_and_never_assembled_locally() {
     assert!(!error.detail.is_empty(), "a rejection must say why");
 }
 
-/// No Piteka crate outside the adapter defines its own version of these types.
+/// Nothing in Piteka outside the adapter defines its own version of these types.
 ///
 /// ARCHITECTURE.md §5.1: Piteka must not copy Parwana domain structs into
 /// product-local equivalents. A copy would not fail to compile — it would
 /// compile and quietly mean something slightly different from the protocol, so
 /// the boundary is asserted over the source tree.
+///
+/// The scan starts at the **workspace root**, not at `crates/`. The workspace
+/// also builds `.`, four binaries under `apps/` — `piteka-mcp` among them, which
+/// owns every accountability side effect — and integration tests under `tests/`,
+/// and a redefinition is exactly as harmful there. Rooting the walk one
+/// directory lower left about a third of the workspace's Rust unexamined while
+/// the file-count guard below still passed on `crates/` alone, so the omission
+/// showed no symptom.
 #[test]
 fn no_piteka_crate_defines_a_product_local_closure_type() {
-    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+    let adapter = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace = adapter
         .parent()
-        .expect("piteka-parwana lives under <repo>/crates");
+        .and_then(std::path::Path::parent)
+        .expect("piteka-parwana lives under <workspace>/crates");
 
     let mut offenders = Vec::new();
     let mut scanned = 0_usize;
-    let mut stack = vec![crates.to_path_buf()];
+    let mut reached = std::collections::BTreeSet::new();
+    let mut stack = vec![workspace.to_path_buf()];
     while let Some(directory) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&directory) else {
             continue;
@@ -439,7 +450,10 @@ fn no_piteka_crate_defines_a_product_local_closure_type() {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                if path.file_name().is_some_and(|name| name == "target") {
+                // Build output and vendored dependencies are not Piteka's source.
+                if path.file_name().is_some_and(|name| {
+                    name == "target" || name == ".git" || name == "node_modules"
+                }) {
                     continue;
                 }
                 stack.push(path);
@@ -449,13 +463,18 @@ fn no_piteka_crate_defines_a_product_local_closure_type() {
                 continue;
             }
             // The adapter is where these names are supposed to appear.
-            if path.starts_with(crates.join("piteka-parwana")) {
+            if path.starts_with(adapter) {
                 continue;
             }
             let Ok(source) = std::fs::read_to_string(&path) else {
                 continue;
             };
             scanned += 1;
+            for root in ["crates", "apps", "src", "tests"] {
+                if path.starts_with(workspace.join(root)) {
+                    reached.insert(root);
+                }
+            }
             for name in [
                 "ConsumedStateRef",
                 "ClosureProof",
@@ -473,8 +492,18 @@ fn no_piteka_crate_defines_a_product_local_closure_type() {
     }
     // A walk that silently reached nothing would pass without checking anything.
     assert!(
-        scanned > 20,
+        scanned > 60,
         "the boundary scan reached only {scanned} source files"
+    );
+    // And a walk rooted too low passes the count while missing whole arms of
+    // the workspace, which is how the `crates/`-only version of this scan went
+    // unnoticed. Each of these roots holds Rust the workspace builds.
+    assert_eq!(
+        reached,
+        ["apps", "crates", "src", "tests"]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>(),
+        "the boundary scan missed an arm of the workspace"
     );
     assert!(
         offenders.is_empty(),
