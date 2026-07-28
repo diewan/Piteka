@@ -109,6 +109,9 @@ pub mod closure {
         VerificationDimension,
         VerificationReport,
         VerificationReportDecodeError,
+        CONFORMANCE_MANIFEST_SHA256,
+        CONFORMANCE_PACKAGE_VERSION,
+        conformance_manifest,
         decode_verification_report,
     };
 }

@@ -2287,6 +2287,7 @@ dependencies = [
  "hex",
  "piteka-domain",
  "piteka-github",
+ "piteka-parwana",
  "piteka-ports",
  "piteka-storage",
  "serde",

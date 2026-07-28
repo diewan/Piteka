@@ -99,6 +99,64 @@ pub struct BundleExport {
     pub bundle_digest: ContentDigest,
 }
 
+/// Export of exact SDK-owned V2 bytes plus the verifier inputs needed for
+/// independent recomputation. JSON feed manifests are deliberately separate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdkV2BundleExport {
+    pub object_id_hex: String,
+    pub canonical_consignment: Vec<u8>,
+    pub verification_report: Vec<u8>,
+    pub verification_context_digest: String,
+    pub limitations: Vec<String>,
+}
+
+/// Preserves a canonical V2 consignment and its typed verification inputs.
+///
+/// The SDK performs both decodes. Piteka neither serializes protocol bytes nor
+/// constructs a product-local report. Hemion can pass these exact bytes to the
+/// same pinned SDK and recompute under the named context.
+pub async fn export_sdk_v2_bundle<P: ProtocolObjectStore>(
+    tenant: &TenantScope,
+    protocol_store: &P,
+    canonical_consignment: &[u8],
+    verification_report: &[u8],
+    expected_context_digest: &str,
+) -> Result<SdkV2BundleExport, BundleExportError> {
+    piteka_parwana::closure::inspect(canonical_consignment)
+        .map_err(|error| BundleExportError::Serialization(error.to_string()))?;
+    let report = piteka_parwana::closure::decode_verification_report(verification_report)
+        .map_err(|error| BundleExportError::Serialization(error.to_string()))?;
+    if report.verification_context_digest() != expected_context_digest {
+        return Err(BundleExportError::Serialization(
+            "verification context does not match the SDK report".into(),
+        ));
+    }
+    let digest = ContentDigest::of(canonical_consignment);
+    let object_id_hex = format!("consignment-v2-{}", digest.to_hex());
+    protocol_store
+        .put(
+            tenant,
+            ProtocolObjectRecord {
+                kind: "parwana_consignment_v2".into(),
+                object_id_hex: object_id_hex.clone(),
+                bytes: canonical_consignment.to_vec(),
+            },
+        )
+        .await?;
+    let limitations = report
+        .dimensions()
+        .iter()
+        .flat_map(|dimension| dimension.limitations.iter().cloned())
+        .collect();
+    Ok(SdkV2BundleExport {
+        object_id_hex,
+        canonical_consignment: canonical_consignment.to_vec(),
+        verification_report: verification_report.to_vec(),
+        verification_context_digest: expected_context_digest.into(),
+        limitations,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Bundle assembly
 // ---------------------------------------------------------------------------

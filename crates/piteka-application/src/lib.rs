@@ -9,6 +9,8 @@ pub mod dispatch;
 pub mod hardening;
 pub mod mcp;
 pub mod observation;
+pub mod portable_execution;
+pub mod protocol_conformance;
 pub mod receipt_production;
 pub mod reconciliation;
 pub mod session;
@@ -28,6 +30,8 @@ mod dispatch_tests;
 mod receipt_production_tests;
 #[cfg(test)]
 mod reconciliation_tests;
+#[cfg(test)]
+mod portable_execution_tests;
 #[cfg(test)]
 mod session_tests;
 

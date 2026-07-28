@@ -12,6 +12,7 @@ futures-util = "0.3"
 hex = "0.4"
 piteka-domain.workspace = true
 piteka-github.workspace = true
+piteka-parwana.workspace = true
 piteka-ports.workspace = true
 piteka-storage.workspace = true
 sha2 = "0.10"
