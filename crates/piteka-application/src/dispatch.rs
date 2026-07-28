@@ -374,6 +374,7 @@ impl<P: DispatchPorts> DispatchUseCase<P> {
                     dispatch_boundary_at_unix_seconds: None,
                     state: ExecutionAttemptState::Prepared,
                     github_deployment_id: None,
+                    protocol_closure: None,
                 };
 
                 self.ports

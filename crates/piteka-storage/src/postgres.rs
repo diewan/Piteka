@@ -13,9 +13,9 @@ use crate::error::{StorageError, StorageResult};
 use crate::model::{
     ActionRequest, ActionRequestStatus, ApprovalDecision, AuditEvent, CasOutcome,
     CaseAppendOutcome, CaseEvent, EvidenceNodeRecord, EvidenceSource, ExecutionAttempt,
-    ExecutionAttemptState, InvestigatorCase, MandateProjection, ProtocolObjectRecord,
-    ReceiptOutcome, ReceiptProjection, SealConsumptionProofRecord, TenantScope,
-    WebhookDeliveryRecord, WebhookRecordOutcome,
+    ExecutionAttemptState, InvestigatorCase, MandateProjection, ProtocolClosureIdentity,
+    ProtocolObjectRecord, ReceiptOutcome, ReceiptProjection, SealConsumptionProofRecord,
+    TenantScope, WebhookDeliveryRecord, WebhookRecordOutcome,
 };
 use crate::ports::{
     ActionRequestStore, ApprovalDecisionStore, AuditLog, EvidenceNodeStore, ExecutionAttemptStore,
@@ -588,8 +588,10 @@ impl ExecutionAttemptStore for PgExecutionAttemptStore {
         sqlx::query(
             "INSERT INTO execution_attempts \
              (tenant_id, attempt_id_hex, mandate_id_hex, state, created_at, intent_id_hex, \
-              reservation_token_digest, executor_identity, correlation_key, github_deployment_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+              reservation_token_digest, executor_identity, correlation_key, github_deployment_id, \
+              protocol_source_state_id_hex, protocol_transition_id_hex, protocol_closure_id_hex, \
+              protocol_consignment_digest_hex, protocol_checkpoint_hex, protocol_closure_assurance_status) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
         )
         .bind(tenant.as_str())
         .bind(&attempt.attempt_id_hex)
@@ -601,6 +603,12 @@ impl ExecutionAttemptStore for PgExecutionAttemptStore {
         .bind(&attempt.executor_identity)
         .bind(&attempt.correlation_key)
         .bind(attempt.github_deployment_id.map(|value| value as i64))
+        .bind(attempt.protocol_closure.as_ref().map(|value| &value.source_state_id_hex))
+        .bind(attempt.protocol_closure.as_ref().map(|value| &value.transition_id_hex))
+        .bind(attempt.protocol_closure.as_ref().map(|value| &value.closure_id_hex))
+        .bind(attempt.protocol_closure.as_ref().map(|value| &value.consignment_digest_hex))
+        .bind(attempt.protocol_closure.as_ref().map(|value| &value.checkpoint_hex))
+        .bind(attempt.protocol_closure.as_ref().map(|value| &value.assurance_status))
         .execute(&self.pool)
         .await
         .map_err(backend)?;
@@ -614,7 +622,9 @@ impl ExecutionAttemptStore for PgExecutionAttemptStore {
     ) -> StorageResult<Option<ExecutionAttempt>> {
         let row = sqlx::query(
             "SELECT mandate_id_hex, state, created_at, github_deployment_id, intent_id_hex, \
-             reservation_token_digest, executor_identity, correlation_key \
+             reservation_token_digest, executor_identity, correlation_key, \
+             protocol_source_state_id_hex, protocol_transition_id_hex, protocol_closure_id_hex, \
+             protocol_consignment_digest_hex, protocol_checkpoint_hex, protocol_closure_assurance_status \
              FROM execution_attempts WHERE tenant_id = $1 AND attempt_id_hex = $2",
         )
         .bind(tenant.as_str())
@@ -639,6 +649,7 @@ impl ExecutionAttemptStore for PgExecutionAttemptStore {
                     .try_get::<Option<i64>, _>("github_deployment_id")
                     .map_err(backend)?
                     .map(|v| v as u64),
+                protocol_closure: protocol_closure_from_row(&row)?,
             })
         })
         .transpose()
@@ -697,7 +708,9 @@ impl ExecutionAttemptStore for PgExecutionAttemptStore {
     ) -> StorageResult<Vec<ExecutionAttempt>> {
         let rows = sqlx::query(
             "SELECT attempt_id_hex, state, created_at, github_deployment_id, intent_id_hex, \
-             reservation_token_digest, executor_identity, correlation_key \
+             reservation_token_digest, executor_identity, correlation_key, \
+             protocol_source_state_id_hex, protocol_transition_id_hex, protocol_closure_id_hex, \
+             protocol_consignment_digest_hex, protocol_checkpoint_hex, protocol_closure_assurance_status \
              FROM execution_attempts WHERE tenant_id = $1 AND mandate_id_hex = $2 ORDER BY created_at",
         )
         .bind(tenant.as_str())
@@ -723,6 +736,7 @@ impl ExecutionAttemptStore for PgExecutionAttemptStore {
                         .try_get::<Option<i64>, _>("github_deployment_id")
                         .map_err(backend)?
                         .map(|v| v as u64),
+                    protocol_closure: protocol_closure_from_row(&row)?,
                 })
             })
             .collect()
@@ -735,7 +749,9 @@ impl ExecutionAttemptStore for PgExecutionAttemptStore {
     ) -> StorageResult<Option<ExecutionAttempt>> {
         let row = sqlx::query(
             "SELECT attempt_id_hex, mandate_id_hex, state, created_at, github_deployment_id, \
-             intent_id_hex, reservation_token_digest, executor_identity, correlation_key \
+             intent_id_hex, reservation_token_digest, executor_identity, correlation_key, \
+             protocol_source_state_id_hex, protocol_transition_id_hex, protocol_closure_id_hex, \
+             protocol_consignment_digest_hex, protocol_checkpoint_hex, protocol_closure_assurance_status \
              FROM execution_attempts WHERE tenant_id = $1 AND github_deployment_id = $2",
         )
         .bind(tenant.as_str())
@@ -757,10 +773,34 @@ impl ExecutionAttemptStore for PgExecutionAttemptStore {
                 dispatch_boundary_at_unix_seconds: None,
                 state: str_to_state(row.try_get::<String, _>("state").map_err(backend)?),
                 github_deployment_id: Some(deployment_id),
+                protocol_closure: protocol_closure_from_row(&row)?,
             })
         })
         .transpose()
     }
+}
+
+fn protocol_closure_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> StorageResult<Option<ProtocolClosureIdentity>> {
+    let source_state_id_hex: Option<String> = row
+        .try_get("protocol_source_state_id_hex")
+        .map_err(backend)?;
+    let Some(source_state_id_hex) = source_state_id_hex else {
+        return Ok(None);
+    };
+    Ok(Some(ProtocolClosureIdentity {
+        source_state_id_hex,
+        transition_id_hex: row.try_get("protocol_transition_id_hex").map_err(backend)?,
+        closure_id_hex: row.try_get("protocol_closure_id_hex").map_err(backend)?,
+        consignment_digest_hex: row
+            .try_get("protocol_consignment_digest_hex")
+            .map_err(backend)?,
+        checkpoint_hex: row.try_get("protocol_checkpoint_hex").map_err(backend)?,
+        assurance_status: row
+            .try_get("protocol_closure_assurance_status")
+            .map_err(backend)?,
+    }))
 }
 
 /// Postgres receipt projection store.

@@ -179,6 +179,7 @@ async fn setup_quarantined_mandate(
                 dispatch_boundary_at_unix_seconds: Some(1_001),
                 state: ExecutionAttemptState::OutcomeAmbiguous,
                 github_deployment_id: Some(deployment_id),
+                protocol_closure: None,
             },
         )
         .await
@@ -454,6 +455,7 @@ async fn no_deployment_id_remains_unresolved() {
                 dispatch_boundary_at_unix_seconds: Some(1_001),
                 state: ExecutionAttemptState::OutcomeAmbiguous,
                 github_deployment_id: None, // No deployment was created
+                protocol_closure: None,
             },
         )
         .await
@@ -512,6 +514,7 @@ async fn timeout_after_request_recovers_deployment_by_correlation_payload() {
                 state: ExecutionAttemptState::OutcomeAmbiguous,
                 // The response containing GitHub's ID was lost after request send.
                 github_deployment_id: None,
+                protocol_closure: None,
             },
         )
         .await

@@ -465,6 +465,7 @@ fn make_attempt(id: &str, mandate: &str) -> ExecutionAttempt {
         dispatch_boundary_at_unix_seconds: None,
         state: ExecutionAttemptState::Prepared,
         github_deployment_id: None,
+        protocol_closure: None,
     }
 }
 
@@ -509,6 +510,53 @@ async fn execution_attempts_are_append_only() {
             .await
             .unwrap()
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn execution_attempt_preserves_protocol_closure_identity_without_backfill() {
+    use crate::model::ProtocolClosureIdentity;
+
+    let store = InMemoryExecutionAttemptStore::default();
+    let mut grounded = make_attempt("att-grounded", "m1");
+    grounded.protocol_closure = Some(ProtocolClosureIdentity {
+        source_state_id_hex: "11".repeat(32),
+        transition_id_hex: "22".repeat(32),
+        closure_id_hex: "33".repeat(32),
+        consignment_digest_hex: "44".repeat(32),
+        checkpoint_hex: "a2010203".into(),
+        assurance_status: "satisfied".into(),
+    });
+    store
+        .insert(&scope("test-tenant"), grounded.clone())
+        .await
+        .unwrap();
+    store
+        .insert(
+            &scope("test-tenant"),
+            make_attempt("att-legacy", "legacy-mandate"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        store
+            .get(&scope("test-tenant"), "att-grounded")
+            .await
+            .unwrap()
+            .unwrap()
+            .protocol_closure,
+        grounded.protocol_closure
+    );
+    assert!(
+        store
+            .get(&scope("test-tenant"), "att-legacy")
+            .await
+            .unwrap()
+            .unwrap()
+            .protocol_closure
+            .is_none(),
+        "legacy executions must remain visibly ungrounded"
     );
 }
 

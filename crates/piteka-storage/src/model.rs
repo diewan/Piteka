@@ -311,6 +311,26 @@ impl ExecutionAttemptState {
     }
 }
 
+/// Parwana-owned portable closure identity grounding an execution.
+///
+/// This is distinct from Piteka's database reservation/CAS guard. `None` on an
+/// execution means legacy or explicitly ungrounded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProtocolClosureIdentity {
+    /// Canonical source-state identifier.
+    pub source_state_id_hex: String,
+    /// Canonical successor transition identifier.
+    pub transition_id_hex: String,
+    /// Canonical closure/nullifier identifier.
+    pub closure_id_hex: String,
+    /// Digest of the canonical V2 consignment.
+    pub consignment_digest_hex: String,
+    /// Canonical finalized-checkpoint bytes encoded as lower-case hex.
+    pub checkpoint_hex: String,
+    /// SDK registry value describing closure assurance.
+    pub assurance_status: String,
+}
+
 /// An execution attempt binding a reserved mandate to one dispatch attempt.
 ///
 /// See Master Plan §10.4 for the semantic model. The raw reservation token is
@@ -346,6 +366,8 @@ pub struct ExecutionAttempt {
     /// E-04: This field is `None` until the provider call completes. It is the
     /// stable reference used for webhook correlation and reconciliation.
     pub github_deployment_id: Option<u64>,
+    /// Portable protocol grounding, absent for legacy or ungrounded attempts.
+    pub protocol_closure: Option<ProtocolClosureIdentity>,
 }
 
 /// The outcome reported by an execution receipt.

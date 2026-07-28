@@ -29,6 +29,7 @@ fn sample_attempt(deployment_id: u64) -> ExecutionAttempt {
         dispatch_boundary_at_unix_seconds: Some(1699999999),
         state: ExecutionAttemptState::Accepted,
         github_deployment_id: Some(deployment_id),
+        protocol_closure: None,
     }
 }
 
