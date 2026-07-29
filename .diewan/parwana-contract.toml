@@ -25,3 +25,10 @@ semantic = "exact"
 source_api = "exact"
 stored_data = "exact"
 policy = "diewan-contract-compat-v1"
+
+# Conformance package this consumer runs published fixtures from. Its own
+# version line: it advances without moving contract_version, and before
+# ORG-REL-005 nothing compared it against the organization's active row.
+[conformance]
+package_version = "stage5-v2"
+digest = "3991d66604d4df779fb1eba376b27428d6a8c0b043cdccf3019f13707f648eaa"
