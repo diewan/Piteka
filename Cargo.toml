@@ -48,6 +48,10 @@ license.workspace = true
 rust-version.workspace = true
 publish = false
 
+[[bin]]
+name = "org-rel-003-campaign-gate"
+path = "src/bin/org_rel_003_campaign_gate.rs"
+
 [dependencies]
 axum.workspace = true
 piteka-application.workspace = true
