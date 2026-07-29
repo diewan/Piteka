@@ -5,6 +5,14 @@ Rust modular monolith: one Axum process with pure domain rules, application
 use cases and ports, and infrastructure adapters separated into inward-pointing
 workspace crates.
 
+Its purpose is to make consequential human, institutional, and agent actions
+answerable: authorization exists before execution, execution is bounded and
+single-use where required, and the resulting receipt remains independently
+verifiable afterward. Piteka now binds portable-exclusivity profiles to
+Parwana V2 source consumption, persists closure identity with executions,
+exports canonical accountability bundles through `csv-sdk`, and moves losing
+or reorganized closure into explicit review rather than silent success.
+
 ## Topology
 
 Where Piteka sits in the DieWan Accountability Platform:
@@ -58,4 +66,3 @@ prove.
 Local configuration in `config/local.toml` is deliberately secret-free.
 Credentials must be supplied through environment variables and must never be
 committed.
-
